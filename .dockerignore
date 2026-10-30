@@ -1,0 +1,10 @@
+.git
+.github
+.env
+.env.*
+.keys
+bin
+coverage.out
+deploy
+docs
+*.md

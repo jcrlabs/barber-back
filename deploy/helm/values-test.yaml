@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  tag: develop-0000000
+  pullPolicy: Always
+
+config:
+  env: test
+  publicUrl: https://barber-test.jcrlabs.net
+  corsAllowedOrigins: "https://barber-test.jcrlabs.net"
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 48Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi
+
+hpa:
+  enabled: false
+
+pdb:
+  enabled: false
+
+postgres:
+  storage: 2Gi

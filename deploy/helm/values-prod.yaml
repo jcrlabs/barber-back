@@ -1,0 +1,15 @@
+replicaCount: 2
+
+image:
+  tag: v0.1.0
+
+config:
+  publicUrl: https://barber.jcrlabs.net
+  corsAllowedOrigins: "https://barber.jcrlabs.net"
+
+postgres:
+  storage: 5Gi
+
+hpa:
+  minReplicas: 2
+  maxReplicas: 5

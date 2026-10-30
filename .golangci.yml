@@ -1,0 +1,19 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosec
+    - bodyclose
+    - errorlint
+  settings:
+    gosec:
+      excludes:
+        - G115 # conversiones int acotadas por validación

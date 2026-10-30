@@ -1,0 +1,17 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: barber-postgres
+  labels:
+    {{- include "barber-back.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: barber-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}

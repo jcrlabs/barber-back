@@ -1,0 +1,18 @@
+# Binarios
+/bin/
+*.exe
+coverage.out
+
+# Secretos — nunca al repo
+.env
+.env.*
+!.env.example
+.keys/
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+.gstack/

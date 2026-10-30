@@ -1,0 +1,71 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/jcrlabs/barber-back
+  pullPolicy: IfNotPresent
+  tag: ""
+  pullSecretName: ghcr-pull-secret
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# El tráfico público entra por el front (nginx proxya /api). Ingress propio opcional.
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-cloudflare
+  host: ""
+  tls: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+config:
+  env: production
+  publicUrl: ""
+  corsAllowedOrigins: ""
+  trustedProxies: "10.0.0.0/8"
+  dbHost: barber-postgres
+  dbPort: "5432"
+  dbName: barber
+  dbSslMode: disable
+  shopTimezone: Europe/Madrid
+  slotStepMin: "15"
+  bookingLeadMin: "60"
+  bookingWindowDays: "45"
+  cancelWindowMin: "120"
+  maxActiveAppointments: "3"
+  seedDemoData: "true"
+
+# SealedSecret gestionado en jcrlabs-infra. Claves:
+# DB_USER, DB_PASSWORD, JWT_PRIVATE_KEY, ADMIN_EMAILS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
+secretName: barber-back-secrets
+
+postgres:
+  enabled: true
+  image: postgres:17-alpine
+  storage: 5Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

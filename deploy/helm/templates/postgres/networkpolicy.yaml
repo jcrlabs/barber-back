@@ -1,0 +1,21 @@
+{{- if .Values.postgres.enabled }}
+# Solo los pods de la API pueden hablar con Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: barber-postgres
+  labels:
+    {{- include "barber-back.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: barber-postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "barber-back.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: 5432
+{{- end }}
