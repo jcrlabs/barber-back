@@ -16,7 +16,17 @@ type CatalogStore interface {
 	GetService(ctx context.Context, id uuid.UUID) (*domain.Service, error)
 	GetBarber(ctx context.Context, id uuid.UUID) (*domain.Barber, error)
 	ListBarbers(ctx context.Context, includeInactive bool) ([]domain.Barber, error)
+	ListOverrides(ctx context.Context, from, to string) ([]domain.DayOverride, error)
 }
+
+// Notifier avisa a la barbería de las reservas nuevas (Telegram, ntfy...). Nunca bloquea la reserva.
+type Notifier interface {
+	NewBooking(a *domain.Appointment)
+}
+
+type noopNotifier struct{}
+
+func (noopNotifier) NewBooking(*domain.Appointment) {}
 
 type AppointmentStore interface {
 	Create(ctx context.Context, a *domain.Appointment) error
@@ -39,11 +49,20 @@ type BookingService struct {
 	catalog CatalogStore
 	appts   AppointmentStore
 	rules   BookingRules
+	notify  Notifier
 	now     func() time.Time
 }
 
 func NewBookingService(catalog CatalogStore, appts AppointmentStore, rules BookingRules) *BookingService {
-	return &BookingService{catalog: catalog, appts: appts, rules: rules, now: time.Now}
+	return &BookingService{catalog: catalog, appts: appts, rules: rules, notify: noopNotifier{}, now: time.Now}
+}
+
+// WithNotifier configura el canal de avisos de reservas nuevas.
+func (s *BookingService) WithNotifier(n Notifier) *BookingService {
+	if n != nil {
+		s.notify = n
+	}
+	return s
 }
 
 func (s *BookingService) Rules() BookingRules { return s.rules }
@@ -96,6 +115,61 @@ func ComputeSlots(day time.Time, loc *time.Location, hours []domain.WorkingHours
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
 	return out
+}
+
+// DaySchedule aplica las excepciones de un día al horario semanal de un barbero.
+// Devuelve las franjas efectivas de ese día y los intervalos bloqueados.
+// Prioridad: cerrado (barbería o barbero) > horario especial > horario semanal; los bloqueos se suman.
+func DaySchedule(b domain.Barber, day time.Time, loc *time.Location, overrides []domain.DayOverride) ([]domain.WorkingHours, []domain.Interval) {
+	y, m, d := day.In(loc).Date()
+	ymd := time.Date(y, m, d, 12, 0, 0, 0, loc)
+	key := ymd.Format("2006-01-02")
+	weekday := int(ymd.Weekday())
+
+	var special []domain.WorkingHours
+	var blocks []domain.Interval
+	for _, o := range overrides {
+		if o.Day != key || (o.BarberID != nil && *o.BarberID != b.ID) {
+			continue
+		}
+		switch o.Kind {
+		case domain.OverrideClosed:
+			return nil, nil
+		case domain.OverrideOpen:
+			if o.StartMin != nil && o.EndMin != nil {
+				special = append(special, domain.WorkingHours{Weekday: weekday, StartMin: *o.StartMin, EndMin: *o.EndMin})
+			}
+		case domain.OverrideBlock:
+			if o.StartMin != nil && o.EndMin != nil {
+				blocks = append(blocks, domain.Interval{
+					Start: time.Date(y, m, d, 0, *o.StartMin, 0, 0, loc),
+					End:   time.Date(y, m, d, 0, *o.EndMin, 0, 0, loc),
+				})
+			}
+		}
+	}
+	if special != nil {
+		return special, blocks
+	}
+	hours := []domain.WorkingHours{}
+	for _, h := range b.Hours {
+		if h.Weekday == weekday {
+			hours = append(hours, h)
+		}
+	}
+	return hours, blocks
+}
+
+func (s *BookingService) overrides(ctx context.Context, from, to time.Time) ([]domain.DayOverride, error) {
+	return s.catalog.ListOverrides(ctx, from.In(s.rules.Location).Format("2006-01-02"), to.In(s.rules.Location).Format("2006-01-02"))
+}
+
+// slotsFor calcula los huecos libres de un barbero en un día aplicando excepciones y citas.
+func (s *BookingService) slotsFor(b domain.Barber, day time.Time, busy []domain.Interval, overrides []domain.DayOverride,
+	duration time.Duration, notBefore time.Time) ([]domain.Interval, bool) {
+	hours, blocks := DaySchedule(b, day, s.rules.Location, overrides)
+	all := append(append([]domain.Interval{}, busy...), blocks...)
+	return ComputeSlots(day, s.rules.Location, hours, all, duration, s.rules.SlotStep, notBefore), len(hours) > 0
 }
 
 // ParseDay interpreta YYYY-MM-DD en la zona horaria de la barbería.
@@ -156,6 +230,10 @@ func (s *BookingService) Availability(ctx context.Context, barberID *uuid.UUID, 
 	from, to := s.dayBounds(day)
 	notBefore := s.now().Add(s.rules.LeadTime)
 	duration := time.Duration(svc.DurationMin) * time.Minute
+	ovs, err := s.overrides(ctx, from, from)
+	if err != nil {
+		return nil, err
+	}
 
 	merged := map[int64]*Slot{}
 	for _, b := range barbers {
@@ -163,7 +241,8 @@ func (s *BookingService) Availability(ctx context.Context, barberID *uuid.UUID, 
 		if err != nil {
 			return nil, err
 		}
-		for _, iv := range ComputeSlots(day, s.rules.Location, b.Hours, busy, duration, s.rules.SlotStep, notBefore) {
+		slots, _ := s.slotsFor(b, day, busy, ovs, duration, notBefore)
+		for _, iv := range slots {
 			key := iv.Start.Unix()
 			if sl, ok := merged[key]; ok {
 				sl.BarberIDs = append(sl.BarberIDs, b.ID)
@@ -203,6 +282,10 @@ func (s *BookingService) Days(ctx context.Context, barberID *uuid.UUID, serviceI
 		}
 		busyBy[b.ID] = busy
 	}
+	ovs, err := s.overrides(ctx, rangeStart, rangeEnd.AddDate(0, 0, -1))
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]DaySummary, 0, n)
 	for i := 0; i < n; i++ {
@@ -211,12 +294,9 @@ func (s *BookingService) Days(ctx context.Context, barberID *uuid.UUID, serviceI
 		if s.inWindow(day) {
 			starts := map[int64]struct{}{}
 			for _, b := range barbers {
-				for _, h := range b.Hours {
-					if h.Weekday == int(day.Weekday()) {
-						sum.Open = true
-					}
-				}
-				for _, iv := range ComputeSlots(day, s.rules.Location, b.Hours, busyBy[b.ID], duration, s.rules.SlotStep, notBefore) {
+				slots, open := s.slotsFor(b, day, busyBy[b.ID], ovs, duration, notBefore)
+				sum.Open = sum.Open || open
+				for _, iv := range slots {
 					starts[iv.Start.Unix()] = struct{}{}
 				}
 			}
@@ -233,6 +313,7 @@ type BookRequest struct {
 	ServiceID uuid.UUID
 	StartsAt  time.Time
 	Notes     string
+	Phone     string
 }
 
 func (s *BookingService) Book(ctx context.Context, req BookRequest) (*domain.Appointment, error) {
@@ -246,6 +327,11 @@ func (s *BookingService) Book(ctx context.Context, req BookRequest) (*domain.App
 	}
 	if !barber.Active {
 		return nil, domain.ErrNotFound
+	}
+
+	phone := strings.TrimSpace(req.Phone)
+	if phone == "" {
+		return nil, domain.ErrPhoneRequired
 	}
 
 	now := s.now()
@@ -270,9 +356,14 @@ func (s *BookingService) Book(ctx context.Context, req BookRequest) (*domain.App
 	if err != nil {
 		return nil, err
 	}
+	ovs, err := s.overrides(ctx, from, from)
+	if err != nil {
+		return nil, err
+	}
 	duration := time.Duration(svc.DurationMin) * time.Minute
 	valid := false
-	for _, iv := range ComputeSlots(day, s.rules.Location, barber.Hours, busy, duration, s.rules.SlotStep, now.Add(s.rules.LeadTime)) {
+	slots, _ := s.slotsFor(*barber, day, busy, ovs, duration, now.Add(s.rules.LeadTime))
+	for _, iv := range slots {
 		if iv.Start.Equal(req.StartsAt) {
 			valid = true
 			break
@@ -286,12 +377,18 @@ func (s *BookingService) Book(ctx context.Context, req BookRequest) (*domain.App
 		ClientID: req.ClientID, BarberID: barber.ID, ServiceID: svc.ID,
 		StartsAt: req.StartsAt.UTC(), EndsAt: req.StartsAt.Add(duration).UTC(),
 		Status: domain.StatusConfirmed, PriceCents: svc.PriceCents, Notes: strings.TrimSpace(req.Notes),
+		ClientPhone: phone,
 	}
 	// La restricción EXCLUDE de Postgres resuelve la carrera entre dos reservas simultáneas.
 	if err := s.appts.Create(ctx, a); err != nil {
 		return nil, err
 	}
-	return s.appts.Get(ctx, a.ID)
+	created, err := s.appts.Get(ctx, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.notify.NewBooking(created)
+	return created, nil
 }
 
 // CancelByClient permite al cliente anular su cita respetando la ventana de cancelación.
@@ -316,17 +413,14 @@ func (s *BookingService) CancelByClient(ctx context.Context, clientID, apptID uu
 	return a, nil
 }
 
-// SetStatusByStaff cambia el estado de una cita confirmada. barberID != nil limita al barbero dueño.
-func (s *BookingService) SetStatusByStaff(ctx context.Context, apptID uuid.UUID, barberID *uuid.UUID, status domain.AppointmentStatus) (*domain.Appointment, error) {
+// SetStatusByStaff cambia el estado de una cita confirmada (solo admins).
+func (s *BookingService) SetStatusByStaff(ctx context.Context, apptID uuid.UUID, status domain.AppointmentStatus) (*domain.Appointment, error) {
 	if status == domain.StatusConfirmed || !status.Valid() {
 		return nil, domain.ErrInvalidState
 	}
 	a, err := s.appts.Get(ctx, apptID)
 	if err != nil {
 		return nil, err
-	}
-	if barberID != nil && a.BarberID != *barberID {
-		return nil, domain.ErrNotFound
 	}
 	if a.Status != domain.StatusConfirmed {
 		return nil, domain.ErrInvalidState
@@ -344,7 +438,7 @@ func (s *BookingService) SetStatusByStaff(ctx context.Context, apptID uuid.UUID,
 // IsBookingError indica si el error es un fallo de negocio esperable (4xx).
 func IsBookingError(err error) bool {
 	for _, e := range []error{domain.ErrSlotTaken, domain.ErrSlotInvalid, domain.ErrTooManyActive,
-		domain.ErrTooLateToCancel, domain.ErrInvalidState} {
+		domain.ErrTooLateToCancel, domain.ErrInvalidState, domain.ErrPhoneRequired} {
 		if errors.Is(err, e) {
 			return true
 		}

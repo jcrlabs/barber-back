@@ -12,6 +12,7 @@ import (
 	"github.com/jcrlabs/barber-back/internal/domain"
 	"github.com/jcrlabs/barber-back/internal/handlers"
 	mw "github.com/jcrlabs/barber-back/internal/middleware"
+	"github.com/jcrlabs/barber-back/internal/notify"
 	"github.com/jcrlabs/barber-back/internal/repository"
 	"github.com/jcrlabs/barber-back/internal/services"
 )
@@ -37,19 +38,23 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	if err != nil {
 		return nil, err
 	}
+	notifier := notify.New(notify.Config{
+		NtfyURL: cfg.NtfyURL, NtfyToken: cfg.NtfyToken, TelegramToken: cfg.TelegramToken,
+		TelegramChat: cfg.TelegramChat, PublicURL: cfg.PublicURL, Location: cfg.ShopTimezone,
+	}, logger)
 	bookingSvc := services.NewBookingService(catalog, appts, services.BookingRules{
 		Location: cfg.ShopTimezone, SlotStep: cfg.SlotStep, LeadTime: cfg.BookingLead,
 		WindowDays: cfg.BookingWindow, CancelWindow: cfg.CancelWindow, MaxActiveAppt: cfg.MaxActiveAppt,
-	})
+	}).WithNotifier(notifier)
 	oauth := services.NewOAuthRegistry(cfg.PublicURL,
 		services.OAuthCredentials{ClientID: cfg.Google.ClientID, ClientSecret: cfg.Google.ClientSecret},
 		services.OAuthCredentials{ClientID: cfg.GitHub.ClientID, ClientSecret: cfg.GitHub.ClientSecret},
 	)
 
 	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure())
-	bookingH := handlers.NewBookingHandler(bookingSvc, catalog, appts)
-	staffH := handlers.NewStaffHandler(bookingSvc, catalog, appts)
-	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone)
+	bookingH := handlers.NewBookingHandler(bookingSvc, catalog, appts, users)
+	staffH := handlers.NewStaffHandler(bookingSvc, appts)
+	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone, notifier.Channels())
 	healthH := handlers.NewHealthHandler(db)
 
 	if cfg.IsProduction() {
@@ -108,8 +113,8 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	authed.POST("/appointments", mw.RateLimit(20, time.Hour, "too many bookings, try again later"), bookingH.Book)
 	authed.POST("/appointments/:id/cancel", bookingH.Cancel)
 
-	// ── Staff (barberos y admins) ──
-	staff := authed.Group("/staff", mw.RequireRole(domain.RoleBarber, domain.RoleAdmin))
+	// ── Agenda (solo admins) ──
+	staff := authed.Group("/staff", mw.RequireRole(domain.RoleAdmin))
 	staff.GET("/agenda", staffH.Agenda)
 	staff.POST("/appointments/:id/status", staffH.SetStatus)
 
@@ -125,6 +130,10 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	admin.PUT("/barbers/:id", adminH.UpdateBarber)
 	admin.DELETE("/barbers/:id", adminH.DeleteBarber)
 	admin.GET("/appointments", adminH.ListAppointments)
+	admin.GET("/notifications", adminH.Notifications)
+	admin.GET("/overrides", adminH.ListOverrides)
+	admin.POST("/overrides", adminH.CreateOverride)
+	admin.DELETE("/overrides/:id", adminH.DeleteOverride)
 	admin.GET("/users", adminH.ListUsers)
 	admin.PATCH("/users/:id/role", adminH.SetUserRole)
 

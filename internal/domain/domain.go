@@ -12,11 +12,10 @@ type Role string
 
 const (
 	RoleClient Role = "client"
-	RoleBarber Role = "barber"
 	RoleAdmin  Role = "admin"
 )
 
-func (r Role) Valid() bool { return r == RoleClient || r == RoleBarber || r == RoleAdmin }
+func (r Role) Valid() bool { return r == RoleClient || r == RoleAdmin }
 
 type AppointmentStatus string
 
@@ -94,6 +93,26 @@ type Appointment struct {
 	ServiceName string            `json:"service_name"`
 }
 
+type OverrideKind string
+
+const (
+	OverrideClosed OverrideKind = "closed" // no se trabaja ese día
+	OverrideOpen   OverrideKind = "open"   // horario especial que sustituye al semanal
+	OverrideBlock  OverrideKind = "block"  // franja bloqueada dentro del horario
+)
+
+// DayOverride es una excepción al horario semanal en una fecha concreta.
+// BarberID nil aplica a toda la barbería.
+type DayOverride struct {
+	ID       uuid.UUID    `json:"id"`
+	BarberID *uuid.UUID   `json:"barber_id"`
+	Day      string       `json:"day"` // YYYY-MM-DD en la zona horaria de la barbería
+	Kind     OverrideKind `json:"kind"`
+	StartMin *int         `json:"start_min"`
+	EndMin   *int         `json:"end_min"`
+	Note     string       `json:"note"`
+}
+
 // Interval es un rango semiabierto [Start, End).
 type Interval struct {
 	Start time.Time
@@ -114,5 +133,6 @@ var (
 	ErrTooManyActive      = errors.New("too many upcoming appointments")
 	ErrTooLateToCancel    = errors.New("too late to cancel")
 	ErrInvalidState       = errors.New("invalid appointment state")
+	ErrPhoneRequired      = errors.New("a contact phone is required")
 	ErrWeakPassword       = errors.New("password must be 8-72 characters and include a letter and a number")
 )

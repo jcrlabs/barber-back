@@ -28,6 +28,7 @@ var errorMap = map[error]apiError{
 	domain.ErrSlotTaken:          {http.StatusConflict, "slot_taken"},
 	domain.ErrSlotInvalid:        {http.StatusUnprocessableEntity, "slot_invalid"},
 	domain.ErrTooManyActive:      {http.StatusUnprocessableEntity, "too_many_active"},
+	domain.ErrPhoneRequired:      {http.StatusUnprocessableEntity, "phone_required"},
 	domain.ErrTooLateToCancel:    {http.StatusUnprocessableEntity, "too_late_to_cancel"},
 	domain.ErrInvalidState:       {http.StatusUnprocessableEntity, "invalid_state"},
 	domain.ErrWeakPassword:       {http.StatusBadRequest, "weak_password"},

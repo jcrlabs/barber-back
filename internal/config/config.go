@@ -47,6 +47,12 @@ type Config struct {
 	CancelWindow  time.Duration
 	MaxActiveAppt int
 	SeedDemoData  bool
+
+	// Avisos de reservas nuevas (opcionales).
+	NtfyURL       string
+	NtfyToken     string
+	TelegramToken string
+	TelegramChat  string
 }
 
 func (c *Config) IsProduction() bool { return c.Env == "production" }
@@ -74,6 +80,10 @@ func Load() (*Config, error) {
 		CancelWindow:   time.Duration(getInt("CANCEL_WINDOW_MIN", 120)) * time.Minute,
 		MaxActiveAppt:  getInt("MAX_ACTIVE_APPOINTMENTS", 3),
 		SeedDemoData:   getEnv("SEED_DEMO_DATA", "true") == "true",
+		NtfyURL:        strings.TrimSpace(os.Getenv("NTFY_URL")),
+		NtfyToken:      os.Getenv("NTFY_TOKEN"),
+		TelegramToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChat:   os.Getenv("TELEGRAM_CHAT_ID"),
 	}
 
 	for _, e := range splitList(os.Getenv("ADMIN_EMAILS")) {
@@ -101,6 +111,9 @@ func Load() (*Config, error) {
 
 	if _, err := url.Parse(cfg.PublicURL); err != nil {
 		return nil, fmt.Errorf("PUBLIC_URL: %w", err)
+	}
+	if cfg.NtfyURL != "" && !strings.HasPrefix(cfg.NtfyURL, "https://") && !strings.HasPrefix(cfg.NtfyURL, "http://") {
+		return nil, errors.New("NTFY_URL must be an http(s) URL")
 	}
 	if cfg.SlotStep <= 0 || cfg.BookingWindow <= 0 {
 		return nil, errors.New("SLOT_STEP_MIN and BOOKING_WINDOW_DAYS must be positive")

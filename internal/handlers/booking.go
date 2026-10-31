@@ -17,10 +17,11 @@ type BookingHandler struct {
 	booking *services.BookingService
 	catalog *repository.CatalogRepository
 	appts   *repository.AppointmentRepository
+	users   *repository.UserRepository
 }
 
-func NewBookingHandler(b *services.BookingService, c *repository.CatalogRepository, a *repository.AppointmentRepository) *BookingHandler {
-	return &BookingHandler{booking: b, catalog: c, appts: a}
+func NewBookingHandler(b *services.BookingService, c *repository.CatalogRepository, a *repository.AppointmentRepository, u *repository.UserRepository) *BookingHandler {
+	return &BookingHandler{booking: b, catalog: c, appts: a, users: u}
 }
 
 // Meta expone las reglas públicas de reserva para que el front las muestre.
@@ -126,6 +127,8 @@ type bookRequest struct {
 	BarberID  uuid.UUID `json:"barber_id" binding:"required"`
 	StartsAt  time.Time `json:"starts_at" binding:"required"`
 	Notes     string    `json:"notes" binding:"max=500"`
+	// Teléfono de contacto obligatorio para que la barbería pueda llamar al cliente.
+	Phone string `json:"phone" binding:"required,phone"`
 }
 
 func (h *BookingHandler) Book(c *gin.Context) {
@@ -135,11 +138,15 @@ func (h *BookingHandler) Book(c *gin.Context) {
 	}
 	a, err := h.booking.Book(c.Request.Context(), services.BookRequest{
 		ClientID: middleware.UserID(c), BarberID: req.BarberID, ServiceID: req.ServiceID,
-		StartsAt: req.StartsAt, Notes: req.Notes,
+		StartsAt: req.StartsAt, Notes: req.Notes, Phone: req.Phone,
 	})
 	if err != nil {
 		fail(c, err)
 		return
+	}
+	// Guardamos el teléfono en el perfil para no volver a pedirlo en la próxima reserva.
+	if u, err := h.users.FindByID(c.Request.Context(), a.ClientID); err == nil && u.Phone != req.Phone {
+		_ = h.users.UpdateProfile(c.Request.Context(), u.ID, u.Name, req.Phone)
 	}
 	c.JSON(http.StatusCreated, a)
 }

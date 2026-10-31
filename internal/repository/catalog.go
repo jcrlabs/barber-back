@@ -131,10 +131,6 @@ func (r *CatalogRepository) GetBarber(ctx context.Context, id uuid.UUID) (*domai
 	return r.getBarberWhere(ctx, `id = $1`, id)
 }
 
-func (r *CatalogRepository) GetBarberByUser(ctx context.Context, userID uuid.UUID) (*domain.Barber, error) {
-	return r.getBarberWhere(ctx, `user_id = $1`, userID)
-}
-
 // getBarberWhere recibe una condición fija definida en este paquete; el valor siempre va como parámetro.
 func (r *CatalogRepository) getBarberWhere(ctx context.Context, cond string, arg any) (*domain.Barber, error) {
 	var b domain.Barber
@@ -223,4 +219,45 @@ func (r *CatalogRepository) IsEmpty(ctx context.Context) (bool, error) {
 	var n int
 	err := r.db.QueryRow(ctx, `SELECT (SELECT count(*) FROM services) + (SELECT count(*) FROM barbers)`).Scan(&n)
 	return n == 0, mapErr(err)
+}
+
+// ─── Excepciones de horario ──────────────────────────────────────────────────
+
+const overrideColumns = `id, barber_id, to_char(day, 'YYYY-MM-DD'), kind, start_min, end_min, note`
+
+// ListOverrides devuelve las excepciones con fecha en [from, to] (YYYY-MM-DD, inclusive).
+func (r *CatalogRepository) ListOverrides(ctx context.Context, from, to string) ([]domain.DayOverride, error) {
+	rows, err := r.db.Query(ctx, `SELECT `+overrideColumns+` FROM schedule_overrides
+		WHERE day BETWEEN $1::date AND $2::date ORDER BY day, start_min NULLS FIRST`, from, to)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer rows.Close()
+	out := []domain.DayOverride{}
+	for rows.Next() {
+		var o domain.DayOverride
+		if err := rows.Scan(&o.ID, &o.BarberID, &o.Day, &o.Kind, &o.StartMin, &o.EndMin, &o.Note); err != nil {
+			return nil, mapErr(err)
+		}
+		out = append(out, o)
+	}
+	return out, mapErr(rows.Err())
+}
+
+func (r *CatalogRepository) CreateOverride(ctx context.Context, o *domain.DayOverride) error {
+	return mapErr(r.db.QueryRow(ctx, `
+		INSERT INTO schedule_overrides (barber_id, day, kind, start_min, end_min, note)
+		VALUES ($1, $2::date, $3, $4, $5, $6) RETURNING id`,
+		o.BarberID, o.Day, o.Kind, o.StartMin, o.EndMin, o.Note).Scan(&o.ID))
+}
+
+func (r *CatalogRepository) DeleteOverride(ctx context.Context, id uuid.UUID) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM schedule_overrides WHERE id = $1`, id)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }

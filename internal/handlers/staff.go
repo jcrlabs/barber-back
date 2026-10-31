@@ -5,46 +5,25 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/jcrlabs/barber-back/internal/domain"
-	"github.com/jcrlabs/barber-back/internal/middleware"
 	"github.com/jcrlabs/barber-back/internal/repository"
 	"github.com/jcrlabs/barber-back/internal/services"
 )
 
-// StaffHandler sirve la agenda a barberos (solo sus citas) y administradores (todas).
+// StaffHandler sirve la agenda del día a los administradores.
 type StaffHandler struct {
 	booking *services.BookingService
-	catalog *repository.CatalogRepository
 	appts   *repository.AppointmentRepository
 }
 
-func NewStaffHandler(b *services.BookingService, c *repository.CatalogRepository, a *repository.AppointmentRepository) *StaffHandler {
-	return &StaffHandler{booking: b, catalog: c, appts: a}
-}
-
-// scopeBarber devuelve el barbero vinculado al usuario si es barbero; nil si es admin.
-func (h *StaffHandler) scopeBarber(c *gin.Context) (*uuid.UUID, bool) {
-	if middleware.Role(c) == domain.RoleAdmin {
-		return nil, true
-	}
-	b, err := h.catalog.GetBarberByUser(c.Request.Context(), middleware.UserID(c))
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "your account is not linked to a barber profile", "code": "no_barber_profile"})
-		return nil, false
-	}
-	return &b.ID, true
+func NewStaffHandler(b *services.BookingService, a *repository.AppointmentRepository) *StaffHandler {
+	return &StaffHandler{booking: b, appts: a}
 }
 
 func (h *StaffHandler) Agenda(c *gin.Context) {
-	scope, ok := h.scopeBarber(c)
+	scope, ok := queryUUID(c, "barber_id")
 	if !ok {
 		return
-	}
-	if scope == nil {
-		if scope, ok = queryUUID(c, "barber_id"); !ok {
-			return
-		}
 	}
 	loc := h.booking.Rules().Location
 	from, err := time.ParseInLocation("2006-01-02", c.DefaultQuery("from", time.Now().In(loc).Format("2006-01-02")), loc)
@@ -82,11 +61,7 @@ func (h *StaffHandler) SetStatus(c *gin.Context) {
 	if !bind(c, &req) {
 		return
 	}
-	scope, ok := h.scopeBarber(c)
-	if !ok {
-		return
-	}
-	a, err := h.booking.SetStatusByStaff(c.Request.Context(), id, scope, req.Status)
+	a, err := h.booking.SetStatusByStaff(c.Request.Context(), id, req.Status)
 	if err != nil {
 		fail(c, err)
 		return

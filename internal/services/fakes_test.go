@@ -196,9 +196,24 @@ func (f *fakeTokens) activeFor(userID uuid.UUID) int {
 // ─── Catálogo / citas en memoria ─────────────────────────────────────────────
 
 type fakeCatalog struct {
-	services map[uuid.UUID]*domain.Service
-	barbers  map[uuid.UUID]*domain.Barber
+	services  map[uuid.UUID]*domain.Service
+	barbers   map[uuid.UUID]*domain.Barber
+	overrides []domain.DayOverride
 }
+
+func (f *fakeCatalog) ListOverrides(_ context.Context, from, to string) ([]domain.DayOverride, error) {
+	out := []domain.DayOverride{}
+	for _, o := range f.overrides {
+		if o.Day >= from && o.Day <= to {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
+type fakeNotifier struct{ got []*domain.Appointment }
+
+func (n *fakeNotifier) NewBooking(a *domain.Appointment) { n.got = append(n.got, a) }
 
 func (f *fakeCatalog) GetService(_ context.Context, id uuid.UUID) (*domain.Service, error) {
 	if s, ok := f.services[id]; ok {

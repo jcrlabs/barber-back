@@ -73,6 +73,8 @@ type bookingFixture struct {
 	service  *domain.Service
 	barber   *domain.Barber
 	client   uuid.UUID
+	catalog  *fakeCatalog
+	notifier *fakeNotifier
 	tuesday  time.Time
 	tenAM    time.Time
 	nowValue time.Time
@@ -89,7 +91,7 @@ func newBookingFixture(t *testing.T) *bookingFixture {
 		barbers:  map[uuid.UUID]*domain.Barber{barber.ID: barber},
 	}
 	f := &bookingFixture{
-		appts: appts, service: service, barber: barber, client: uuid.New(),
+		appts: appts, service: service, barber: barber, client: uuid.New(), catalog: catalog, notifier: &fakeNotifier{},
 		tuesday: at(2026, 11, 3, 0, 0), tenAM: at(2026, 11, 3, 10, 0),
 		nowValue: at(2026, 11, 1, 12, 0),
 	}
@@ -97,12 +99,13 @@ func newBookingFixture(t *testing.T) *bookingFixture {
 		Location: madrid, SlotStep: 15 * time.Minute, LeadTime: time.Hour,
 		WindowDays: 30, CancelWindow: 2 * time.Hour, MaxActiveAppt: 2,
 	})
+	f.svc.WithNotifier(f.notifier)
 	f.svc.now = func() time.Time { return f.nowValue }
 	return f
 }
 
 func (f *bookingFixture) book(start time.Time) (*domain.Appointment, error) {
-	return f.svc.Book(context.Background(), BookRequest{ClientID: f.client, BarberID: f.barber.ID, ServiceID: f.service.ID, StartsAt: start})
+	return f.svc.Book(context.Background(), BookRequest{ClientID: f.client, BarberID: f.barber.ID, ServiceID: f.service.ID, StartsAt: start, Phone: "+34 600 000 000"})
 }
 
 func TestBookAndAvailability(t *testing.T) {
@@ -181,12 +184,8 @@ func TestCancelAndStaffStatus(t *testing.T) {
 	if _, err := f.svc.CancelByClient(ctx, uuid.New(), a.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("foreign cancel: got %v", err)
 	}
-	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, nil, domain.StatusCompleted); !errors.Is(err, domain.ErrInvalidState) {
+	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCompleted); !errors.Is(err, domain.ErrInvalidState) {
 		t.Fatalf("complete before start: got %v", err)
-	}
-	other := uuid.New()
-	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, &other, domain.StatusCancelled); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("other barber: got %v", err)
 	}
 
 	f.nowValue = f.tenAM.Add(-time.Hour) // dentro de la ventana de 2h
@@ -195,11 +194,11 @@ func TestCancelAndStaffStatus(t *testing.T) {
 	}
 
 	f.nowValue = f.tenAM.Add(35 * time.Minute)
-	got, err := f.svc.SetStatusByStaff(ctx, a.ID, &f.barber.ID, domain.StatusCompleted)
+	got, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCompleted)
 	if err != nil || got.Status != domain.StatusCompleted {
 		t.Fatalf("complete: %v %v", got, err)
 	}
-	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, nil, domain.StatusNoShow); !errors.Is(err, domain.ErrInvalidState) {
+	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusNoShow); !errors.Is(err, domain.ErrInvalidState) {
 		t.Fatalf("re-transition: got %v", err)
 	}
 }
@@ -219,4 +218,75 @@ func TestDaysSummary(t *testing.T) {
 			t.Errorf("day %s open=%v free=%d", d.Date, d.Open, d.Free)
 		}
 	}
+}
+
+func TestBookRequiresPhoneAndNotifies(t *testing.T) {
+	f := newBookingFixture(t)
+	_, err := f.svc.Book(context.Background(), BookRequest{ClientID: f.client, BarberID: f.barber.ID, ServiceID: f.service.ID, StartsAt: f.tenAM, Phone: "  "})
+	if !errors.Is(err, domain.ErrPhoneRequired) {
+		t.Fatalf("no phone: got %v", err)
+	}
+	a, err := f.book(f.tenAM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ClientPhone != "+34 600 000 000" || len(f.notifier.got) != 1 {
+		t.Fatalf("phone=%q notified=%d", a.ClientPhone, len(f.notifier.got))
+	}
+}
+
+func TestScheduleOverrides(t *testing.T) {
+	ptr := func(v int) *int { return &v }
+	ctx := context.Background()
+	slotsOn := func(f *bookingFixture) int {
+		t.Helper()
+		slots, err := f.svc.Availability(ctx, nil, f.service.ID, f.tuesday)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(slots)
+	}
+
+	base := newBookingFixture(t)
+	normal := slotsOn(base) // 10:00-14:00, servicio de 30 min cada 15 → 15 huecos
+	if normal != 15 {
+		t.Fatalf("baseline slots = %d", normal)
+	}
+
+	tests := []struct {
+		name string
+		ov   domain.DayOverride
+		want int
+	}{
+		{"barbería cerrada", domain.DayOverride{Day: "2026-11-03", Kind: domain.OverrideClosed}, 0},
+		{"otro día no afecta", domain.DayOverride{Day: "2026-11-04", Kind: domain.OverrideClosed}, 15},
+		{"bloqueo 11:00-12:00", domain.DayOverride{Day: "2026-11-03", Kind: domain.OverrideBlock, StartMin: ptr(660), EndMin: ptr(720)}, 10},
+		{"horario especial 16:00-17:00", domain.DayOverride{Day: "2026-11-03", Kind: domain.OverrideOpen, StartMin: ptr(960), EndMin: ptr(1020)}, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBookingFixture(t)
+			f.catalog.overrides = []domain.DayOverride{tc.ov}
+			if got := slotsOn(f); got != tc.want {
+				t.Fatalf("got %d slots, want %d", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("cierre de otro barbero no afecta", func(t *testing.T) {
+		f := newBookingFixture(t)
+		other := uuid.New()
+		f.catalog.overrides = []domain.DayOverride{{BarberID: &other, Day: "2026-11-03", Kind: domain.OverrideClosed}}
+		if got := slotsOn(f); got != 15 {
+			t.Fatalf("got %d", got)
+		}
+	})
+
+	t.Run("no se puede reservar un día cerrado", func(t *testing.T) {
+		f := newBookingFixture(t)
+		f.catalog.overrides = []domain.DayOverride{{BarberID: &f.barber.ID, Day: "2026-11-03", Kind: domain.OverrideClosed}}
+		if _, err := f.book(f.tenAM); !errors.Is(err, domain.ErrSlotInvalid) {
+			t.Fatalf("got %v", err)
+		}
+	})
 }

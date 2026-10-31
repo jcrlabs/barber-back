@@ -20,7 +20,8 @@ func NewAppointmentRepository(db *pgxpool.Pool) *AppointmentRepository {
 
 const appointmentSelect = `
 	SELECT a.id, a.client_id, a.barber_id, a.service_id, a.starts_at, a.ends_at, a.status,
-	       a.price_cents, a.notes, a.created_at, u.name, u.email, u.phone, b.name, s.name
+	       a.price_cents, a.notes, a.created_at, u.name, u.email,
+	       COALESCE(NULLIF(a.client_phone, ''), u.phone), b.name, s.name
 	FROM appointments a
 	JOIN users u ON u.id = a.client_id
 	JOIN barbers b ON b.id = a.barber_id
@@ -54,9 +55,9 @@ func collect(rows pgx.Rows, err error) ([]domain.Appointment, error) {
 
 func (r *AppointmentRepository) Create(ctx context.Context, a *domain.Appointment) error {
 	return mapErr(r.db.QueryRow(ctx, `
-		INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, price_cents, notes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at`,
-		a.ClientID, a.BarberID, a.ServiceID, a.StartsAt, a.EndsAt, a.Status, a.PriceCents, a.Notes,
+		INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, price_cents, notes, client_phone)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, created_at`,
+		a.ClientID, a.BarberID, a.ServiceID, a.StartsAt, a.EndsAt, a.Status, a.PriceCents, a.Notes, a.ClientPhone,
 	).Scan(&a.ID, &a.CreatedAt))
 }
 
@@ -102,8 +103,12 @@ type AppointmentFilter struct {
 	Status   domain.AppointmentStatus
 	From     *time.Time
 	To       *time.Time
-	Limit    int
-	Offset   int
+	// CreatedAfter filtra por fecha de reserva (avisos de citas nuevas).
+	CreatedAfter *time.Time
+	// NewestFirst ordena por fecha de reserva descendente en lugar de por hora de la cita.
+	NewestFirst bool
+	Limit       int
+	Offset      int
 }
 
 // List construye un WHERE dinámico: solo se interpolan índices de placeholder, nunca valores.
@@ -126,6 +131,9 @@ func (r *AppointmentRepository) List(ctx context.Context, f AppointmentFilter) (
 	if f.To != nil {
 		add("a.starts_at < ?", *f.To)
 	}
+	if f.CreatedAfter != nil {
+		add("a.created_at > ?", *f.CreatedAfter)
+	}
 	where := ""
 	if len(conds) > 0 {
 		where = " WHERE " + strings.Join(conds, " AND ")
@@ -135,8 +143,12 @@ func (r *AppointmentRepository) List(ctx context.Context, f AppointmentFilter) (
 	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM appointments a`+where, args...).Scan(&total); err != nil {
 		return nil, 0, mapErr(err)
 	}
+	order := ` ORDER BY a.starts_at ASC`
+	if f.NewestFirst {
+		order = ` ORDER BY a.created_at DESC`
+	}
 	args = append(args, f.Limit, f.Offset)
-	list, err := collect(r.db.Query(ctx, appointmentSelect+where+` ORDER BY a.starts_at ASC LIMIT $`+
+	list, err := collect(r.db.Query(ctx, appointmentSelect+where+order+` LIMIT $`+
 		strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...))
 	return list, total, err
 }

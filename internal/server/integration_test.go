@@ -179,7 +179,12 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	// Dos clientes intentan el mismo hueco a la vez: exactamente uno gana.
 	bob := &client{t: t, h: h}
 	bob.do("POST", "/api/v1/auth/register", map[string]any{"name": "Bob", "email": "bob@test.es", "password": "navaja2026"})
-	book := map[string]any{"service_id": serviceID, "barber_id": barberID, "starts_at": startsAt, "notes": "degradado bajo"}
+	// Sin teléfono no se puede reservar: la barbería necesita poder llamar.
+	noPhone := map[string]any{"service_id": serviceID, "barber_id": barberID, "starts_at": startsAt}
+	if code, _, _ := ana.do("POST", "/api/v1/appointments", noPhone); code != 400 {
+		t.Fatalf("booking without phone: %d", code)
+	}
+	book := map[string]any{"service_id": serviceID, "barber_id": barberID, "starts_at": startsAt, "notes": "degradado bajo", "phone": "+34 600 112 233"}
 	var wg sync.WaitGroup
 	results := make([]int, 2)
 	var apptID string
@@ -216,7 +221,7 @@ func TestEndToEndBookingFlow(t *testing.T) {
 		winner = bob
 	}
 	code, _, mine := winner.do("GET", "/api/v1/appointments/mine", nil)
-	if code != 200 || len(mine) != 1 {
+	if code != 200 || len(mine) != 1 || mine[0].(map[string]any)["client_phone"] != "+34 600 112 233" {
 		t.Fatalf("mine: %d %v", code, mine)
 	}
 
@@ -275,5 +280,44 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	}
 	if code, body, _ := winner.do("GET", "/api/v1/admin/appointments?status=cancelled", nil); code != 200 || body["total"].(float64) != 1 {
 		t.Fatalf("admin appointments: %d %v", code, body)
+	}
+
+	// Avisos: la reserva aparece como nueva para el admin.
+	if code, body, _ := winner.do("GET", "/api/v1/admin/notifications", nil); code != 200 || len(body["items"].([]any)) != 1 {
+		t.Fatalf("notifications: %d %v", code, body)
+	}
+
+	// Excepciones: cerrar la barbería ese día deja el día sin huecos y no se puede reservar.
+	if code, _, _ := winner.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "open"}); code != 400 {
+		t.Fatalf("open override without hours: %d", code)
+	}
+	code, ov, _ := winner.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "closed", "note": "Festivo"})
+	if code != 201 {
+		t.Fatalf("create override: %d %v", code, ov)
+	}
+	_, avail, _ = anon.do("GET", "/api/v1/availability?service_id="+serviceID+"&date="+date, nil)
+	if n := len(avail["slots"].([]any)); n != 0 {
+		t.Fatalf("closed day still offers %d slots", n)
+	}
+	if code, _, _ := loser.do("POST", "/api/v1/appointments", book); code != 422 {
+		t.Fatalf("booking on closed day: %d", code)
+	}
+	if code, _, list := winner.do("GET", "/api/v1/admin/overrides", nil); code != 200 || len(list) != 1 {
+		t.Fatalf("list overrides: %d %v", code, list)
+	}
+	if code, _, _ := winner.do("DELETE", "/api/v1/admin/overrides/"+ov["id"].(string), nil); code != 204 {
+		t.Fatalf("delete override: %d", code)
+	}
+	_, avail, _ = anon.do("GET", "/api/v1/availability?service_id="+serviceID+"&date="+date, nil)
+	if len(avail["slots"].([]any)) == 0 {
+		t.Fatal("slots not restored after deleting override")
+	}
+
+	// Un cliente no puede tocar la agenda ni las excepciones.
+	if code, _, _ := loser.do("GET", "/api/v1/staff/agenda", nil); code != 403 {
+		t.Fatalf("client reached agenda: %d", code)
+	}
+	if code, _, _ := loser.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "closed"}); code != 403 {
+		t.Fatalf("client created override: %d", code)
 	}
 }
