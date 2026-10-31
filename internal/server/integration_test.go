@@ -329,8 +329,8 @@ func TestEndToEndBookingFlow(t *testing.T) {
 		t.Fatal(err) // idempotente: no pisa la contraseña existente
 	}
 	boss := &client{t: t, h: h}
-	if code, body, _ := boss.do("POST", "/api/v1/auth/login", map[string]any{"email": "admin", "password": "admin"}); code != 200 || body["user"].(map[string]any)["role"] != "admin" {
-		t.Fatalf("bootstrap admin login: %d %v", code, body)
+	if code, body, _ := boss.do("POST", "/api/v1/auth/login", map[string]any{"email": "admin", "password": "admin"}); code != 200 || body["user"].(map[string]any)["role"] != "admin" || body["weak_password"] != true {
+		t.Fatalf("bootstrap admin login (debe avisar de contraseña débil): %d %v", code, body)
 	}
 	if code, _, _ := boss.do("GET", "/api/v1/admin/stats", nil); code != 200 {
 		t.Fatalf("bootstrap admin stats: %d", code)

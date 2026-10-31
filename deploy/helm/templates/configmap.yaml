@@ -10,6 +10,7 @@ data:
   PUBLIC_URL: {{ required "config.publicUrl is required" .Values.config.publicUrl | quote }}
   CORS_ALLOWED_ORIGINS: {{ .Values.config.corsAllowedOrigins | quote }}
   TRUSTED_PROXIES: {{ .Values.config.trustedProxies | quote }}
+  TRUSTED_PLATFORM: {{ .Values.config.trustedPlatform | quote }}
   DB_HOST: {{ .Values.config.dbHost | quote }}
   DB_PORT: {{ .Values.config.dbPort | quote }}
   DB_NAME: {{ .Values.config.dbName | quote }}

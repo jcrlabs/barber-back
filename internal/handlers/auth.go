@@ -26,22 +26,33 @@ const (
 	oauthPath     = "/api/v1/auth/oauth"
 )
 
+// Fallos de login permitidos por cuenta antes de bloquearla un rato, vengan de la IP que vengan.
+const (
+	accountMaxFailures = 8
+	accountLockWindow  = 15 * time.Minute
+)
+
 type AuthHandler struct {
 	auth      *services.AuthService
 	users     *repository.UserRepository
 	oauth     *services.OAuthRegistry
 	publicURL string
 	secure    bool
+	// accountGuard frena la fuerza bruta distribuida contra una misma cuenta (p.ej. "admin").
+	accountGuard *middleware.RateLimiter
 }
 
 func NewAuthHandler(auth *services.AuthService, users *repository.UserRepository, oauth *services.OAuthRegistry, publicURL string, secure bool) *AuthHandler {
-	return &AuthHandler{auth: auth, users: users, oauth: oauth, publicURL: publicURL, secure: secure}
+	return &AuthHandler{auth: auth, users: users, oauth: oauth, publicURL: publicURL, secure: secure,
+		accountGuard: middleware.NewRateLimiter(accountMaxFailures, accountLockWindow)}
 }
 
 type sessionResponse struct {
 	AccessToken string       `json:"access_token"`
 	ExpiresAt   time.Time    `json:"expires_at"`
 	User        *domain.User `json:"user"`
+	// WeakPassword avisa de que la contraseña usada no cumple la política actual (p.ej. la cuenta admin inicial).
+	WeakPassword bool `json:"weak_password,omitempty"`
 }
 
 // setCookie centraliza los atributos: siempre HttpOnly; Secure cuando la app se sirve por HTTPS.
@@ -93,12 +104,24 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if !bind(c, &req) {
 		return
 	}
+	key := "acct:" + services.NormalizeEmail(req.Email)
+	if blocked, retry := h.accountGuard.Blocked(key); blocked {
+		middleware.TooMany(c, retry, "too many failed attempts for this account, try again later")
+		return
+	}
 	s, err := h.auth.Login(c.Request.Context(), req.Email, req.Password)
 	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCredentials) {
+			h.accountGuard.Allow(key)
+		}
 		fail(c, err)
 		return
 	}
-	h.writeSession(c, http.StatusOK, s)
+	h.accountGuard.Reset(key)
+	h.setCookie(c, refreshCookie, s.RefreshToken, refreshPath, int(time.Until(s.RefreshExpiresAt).Seconds()), http.SameSiteStrictMode)
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, sessionResponse{AccessToken: s.AccessToken, ExpiresAt: s.AccessExpiresAt, User: s.User,
+		WeakPassword: services.ValidatePassword(req.Password) != nil})
 }
 
 func (h *AuthHandler) Refresh(c *gin.Context) {

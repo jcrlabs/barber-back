@@ -69,6 +69,11 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
 		return nil, err
 	}
+	if cfg.TrustedPlatform == "cloudflare" {
+		// Todo el tráfico llega por el túnel de Cloudflare: sin esto, todas las peticiones
+		// parecen venir del balanceador y los límites por IP serían compartidos por todos.
+		r.TrustedPlatform = gin.PlatformCloudflare
+	}
 	r.Use(gin.Recovery(), mw.RequestID(), mw.RequestLogger(logger), mw.SecurityHeaders(cfg.CookieSecure()))
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.AllowedOrigins,
@@ -108,31 +113,35 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 
 	// ── Usuario autenticado ──
 	authed := api.Group("")
-	authed.Use(mw.AuthRequired(authSvc))
+	// Además del límite por IP, cada usuario tiene su propio cupo: no se lo salta cambiando de IP.
+	authed.Use(mw.AuthRequired(authSvc), mw.RateLimitUser(300, time.Minute, "too many requests"))
 	authed.GET("/auth/me", authH.Me)
-	authed.PATCH("/auth/me", authH.UpdateMe)
-	authed.POST("/auth/me/password", mw.RateLimit(5, 15*time.Minute, "too many password changes"), authH.ChangePassword)
-	authed.POST("/auth/logout-all", authH.LogoutAll)
+	authed.PATCH("/auth/me", mw.RateLimitUser(20, time.Hour, "too many profile changes"), authH.UpdateMe)
+	authed.POST("/auth/me/password", mw.RateLimit(5, 15*time.Minute, "too many password changes"),
+		mw.RateLimitUser(5, 15*time.Minute, "too many password changes"), authH.ChangePassword)
+	authed.POST("/auth/logout-all", mw.RateLimitUser(10, time.Hour, "too many requests"), authH.LogoutAll)
 
 	authed.GET("/appointments/mine", bookingH.Mine)
-	authed.POST("/appointments", mw.RateLimit(20, time.Hour, "too many bookings, try again later"), bookingH.Book)
-	authed.POST("/appointments/:id/cancel", bookingH.Cancel)
+	authed.POST("/appointments", mw.RateLimit(20, time.Hour, "too many bookings, try again later"),
+		mw.RateLimitUser(10, time.Hour, "too many bookings, try again later"), bookingH.Book)
+	authed.POST("/appointments/:id/cancel", mw.RateLimitUser(20, time.Hour, "too many cancellations"), bookingH.Cancel)
 
 	// ── Panel de barbero (barberos ven lo suyo; el admin, toda la barbería) ──
 	staff := authed.Group("/staff", mw.RequireRole(domain.RoleBarber, domain.RoleAdmin))
 	staff.GET("/agenda", staffH.Agenda)
-	staff.POST("/appointments/:id/status", staffH.SetStatus)
+	staffWrite := mw.RateLimitUser(300, time.Hour, "too many changes, slow down")
+	staff.POST("/appointments/:id/status", staffWrite, staffH.SetStatus)
 	staff.GET("/notifications", staffH.Notifications)
 	staff.GET("/overrides", staffH.ListOverrides)
-	staff.POST("/overrides", staffH.CreateOverride)
-	staff.DELETE("/overrides/:id", staffH.DeleteOverride)
+	staff.POST("/overrides", staffWrite, staffH.CreateOverride)
+	staff.DELETE("/overrides/:id", staffWrite, staffH.DeleteOverride)
 	staff.GET("/me", staffH.Me)
-	staff.PUT("/me/hours", staffH.UpdateMyHours)
-	staff.PUT("/me/notify", staffH.UpdateMyNotify)
-	staff.POST("/me/notify/test", mw.RateLimit(5, 15*time.Minute, "too many test notifications"), staffH.TestMyNotify)
+	staff.PUT("/me/hours", staffWrite, staffH.UpdateMyHours)
+	staff.PUT("/me/notify", staffWrite, staffH.UpdateMyNotify)
+	staff.POST("/me/notify/test", mw.RateLimitUser(5, 15*time.Minute, "too many test notifications"), staffH.TestMyNotify)
 
 	// ── Admin ──
-	admin := authed.Group("/admin", mw.RequireRole(domain.RoleAdmin))
+	admin := authed.Group("/admin", mw.RequireRole(domain.RoleAdmin), mw.RateLimitUser(600, time.Hour, "too many admin requests"))
 	admin.GET("/stats", adminH.Stats)
 	admin.GET("/services", adminH.ListServices)
 	admin.POST("/services", adminH.CreateService)

@@ -6,6 +6,8 @@ image:
 config:
   publicUrl: https://edgarbarber.jcrlabs.net
   corsAllowedOrigins: "https://edgarbarber.jcrlabs.net"
+  # El tráfico solo entra por el túnel de Cloudflare (sin puertos abiertos en el router).
+  trustedPlatform: cloudflare
 
 postgres:
   storage: 5Gi

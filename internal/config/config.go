@@ -28,7 +28,9 @@ type Config struct {
 	PublicURL      string // URL pública de la app (front), p.ej. https://barber.jcrlabs.net
 	AllowedOrigins []string
 	TrustedProxies []string
-	MaxRequestSize int64
+	// TrustedPlatform="cloudflare" toma la IP real del cliente de CF-Connecting-IP (solo si todo el tráfico entra por Cloudflare).
+	TrustedPlatform string
+	MaxRequestSize  int64
 
 	JWTPrivateKey *rsa.PrivateKey
 	JWTIssuer     string
@@ -79,6 +81,7 @@ func Load() (*Config, error) {
 		PublicURL:              strings.TrimRight(getEnv("PUBLIC_URL", "http://localhost:5173"), "/"),
 		AllowedOrigins:         splitList(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
 		TrustedProxies:         splitList(getEnv("TRUSTED_PROXIES", "10.0.0.0/8,127.0.0.1/32")),
+		TrustedPlatform:        strings.ToLower(os.Getenv("TRUSTED_PLATFORM")),
 		MaxRequestSize:         int64(getInt("MAX_REQUEST_SIZE_BYTES", 1<<20)),
 		JWTIssuer:              getEnv("JWT_ISSUER", "barber-back"),
 		AccessTTL:              time.Duration(getInt("JWT_ACCESS_TTL_MIN", 15)) * time.Minute,
@@ -139,6 +142,9 @@ func Load() (*Config, error) {
 	}
 	if (cfg.SMTP.Host == "") != (cfg.SMTP.From == "") {
 		return nil, errors.New("SMTP_HOST and SMTP_FROM must be set together")
+	}
+	if cfg.TrustedPlatform != "" && cfg.TrustedPlatform != "cloudflare" {
+		return nil, errors.New("TRUSTED_PLATFORM must be empty or cloudflare")
 	}
 	if cfg.SlotStep <= 0 || cfg.BookingWindow <= 0 {
 		return nil, errors.New("SLOT_STEP_MIN and BOOKING_WINDOW_DAYS must be positive")
