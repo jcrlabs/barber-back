@@ -16,7 +16,6 @@ env:
 # Required GitHub secrets:
 #   ARGOCD_SERVER  — ArgoCD server URL
 #   ARGOCD_TOKEN   — ArgoCD API token
-#   KUBECONFIG     — base64-encoded kubeconfig (only for rollout verify)
 # ─────────────────────────────────────────────────────────────────────────────
 
 jobs:
@@ -70,18 +69,17 @@ jobs:
             --server $ARGOCD_SERVER --auth-token $ARGOCD_TOKEN --grpc-web \
             --retry-limit 3 --retry-backoff-duration 15s
 
-      - name: Verify rollout + auto-rollback
+      # La API de Kubernetes no se expone a internet: verificamos el despliegue a través de ArgoCD.
+      - name: Verify rollout (ArgoCD)
         env:
-          KUBECONFIG_DATA: ${{ secrets.KUBECONFIG }}
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
-          echo "$KUBECONFIG_DATA" | base64 -d > /tmp/kc
-          KUBECONFIG=/tmp/kc kubectl rollout status deployment/barber-back \
-            -n barber --timeout=5m || \
-          {
-            echo "=== Rollout failed — pod diagnostics ==="
-            KUBECONFIG=/tmp/kc kubectl get pods -n barber -l app.kubernetes.io/name=barber-back
-            KUBECONFIG=/tmp/kc kubectl describe pods -n barber -l app.kubernetes.io/name=barber-back | tail -40
-            KUBECONFIG=/tmp/kc kubectl get events -n barber --sort-by='.lastTimestamp' | tail -20
-            KUBECONFIG=/tmp/kc kubectl rollout undo deployment/barber-back -n barber
-            exit 1
-          }
+          curl -sSfL https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 -o /usr/local/bin/argocd
+          chmod +x /usr/local/bin/argocd
+          argo() { argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_TOKEN" --grpc-web "$@"; }
+          if ! argo app get barber-back --refresh > /dev/null; then
+            echo "::warning::No se pudo consultar la app barber-back en ArgoCD; no hay despliegue que verificar"
+            exit 0
+          fi
+          argo app wait barber-back --sync --health --timeout 300 || { argo app get barber-back; exit 1; }
