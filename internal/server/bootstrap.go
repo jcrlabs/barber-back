@@ -24,7 +24,9 @@ func BootstrapAdmin(ctx context.Context, users *repository.UserRepository, login
 	}
 	h := string(hash)
 	u := &domain.User{Email: login, Name: "Admin", PasswordHash: &h, Role: domain.RoleAdmin, EmailVerified: true}
-	if err := users.Create(ctx, u); err != nil {
+	if err := users.Create(ctx, u); errors.Is(err, domain.ErrEmailTaken) {
+		return nil // otra réplica la creó a la vez
+	} else if err != nil {
 		return err
 	}
 	slog.Info("bootstrap admin created", slog.String("user_id", u.ID.String()))

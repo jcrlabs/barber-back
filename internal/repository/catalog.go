@@ -261,3 +261,20 @@ func (r *CatalogRepository) DeleteOverride(ctx context.Context, id uuid.UUID) er
 	}
 	return nil
 }
+
+// seedLockID serializa la siembra inicial entre réplicas que arrancan a la vez.
+const seedLockID = 727275
+
+// WithSeedLock ejecuta fn con un advisory lock de sesión, para que solo una réplica siembre el catálogo.
+func (r *CatalogRepository) WithSeedLock(ctx context.Context, fn func() error) error {
+	conn, err := r.db.Acquire(ctx)
+	if err != nil {
+		return mapErr(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, seedLockID); err != nil {
+		return mapErr(err)
+	}
+	defer func() { _, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, seedLockID) }()
+	return fn()
+}

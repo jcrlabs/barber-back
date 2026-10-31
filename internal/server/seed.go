@@ -11,6 +11,10 @@ import (
 // SeedDemo crea el catálogo inicial de la barbería si está vacío: un único servicio (corte de 30 min)
 // y un único barbero (Edgar) con su horario. Desde el panel de admin se ajusta todo después.
 func SeedDemo(ctx context.Context, catalog *repository.CatalogRepository) error {
+	return catalog.WithSeedLock(ctx, func() error { return seed(ctx, catalog) })
+}
+
+func seed(ctx context.Context, catalog *repository.CatalogRepository) error {
 	empty, err := catalog.IsEmpty(ctx)
 	if err != nil || !empty {
 		return err
