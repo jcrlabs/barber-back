@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  tag: develop-0000000
+  tag: develop-07961e0
   pullPolicy: Always
 
 config:
