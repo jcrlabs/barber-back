@@ -218,6 +218,17 @@ func TestDaysSummary(t *testing.T) {
 			t.Errorf("day %s open=%v free=%d", d.Date, d.Open, d.Free)
 		}
 	}
+
+	// Con una cita, el martes sigue teniendo el mismo total pero menos huecos libres.
+	if _, err := f.book(f.tenAM); err != nil {
+		t.Fatal(err)
+	}
+	days, _ = f.svc.Days(context.Background(), nil, f.service.ID, f.nowValue, 7)
+	for _, d := range days {
+		if d.Date == "2026-11-03" && (d.Total != 15 || d.Free >= d.Total) {
+			t.Fatalf("tuesday total=%d free=%d", d.Total, d.Free)
+		}
+	}
 }
 
 func TestBookRequiresPhoneAndNotifies(t *testing.T) {

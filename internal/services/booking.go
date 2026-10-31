@@ -78,7 +78,8 @@ type DaySummary struct {
 	Date  string `json:"date"`
 	Free  int    `json:"free"`
 	Open  bool   `json:"open"`
-	Total int    `json:"-"`
+	// Total son los huecos que tendría el día sin ninguna cita (según horario, excepciones y antelación).
+	Total int `json:"total"`
 }
 
 // ComputeSlots calcula los huecos de `duration` dentro de las franjas de trabajo de un día,
@@ -292,15 +293,19 @@ func (s *BookingService) Days(ctx context.Context, barberID *uuid.UUID, serviceI
 		day := rangeStart.AddDate(0, 0, i)
 		sum := DaySummary{Date: day.Format("2006-01-02")}
 		if s.inWindow(day) {
-			starts := map[int64]struct{}{}
+			starts, all := map[int64]struct{}{}, map[int64]struct{}{}
 			for _, b := range barbers {
 				slots, open := s.slotsFor(b, day, busyBy[b.ID], ovs, duration, notBefore)
 				sum.Open = sum.Open || open
 				for _, iv := range slots {
 					starts[iv.Start.Unix()] = struct{}{}
 				}
+				empty, _ := s.slotsFor(b, day, nil, ovs, duration, notBefore)
+				for _, iv := range empty {
+					all[iv.Start.Unix()] = struct{}{}
+				}
 			}
-			sum.Free = len(starts)
+			sum.Free, sum.Total = len(starts), len(all)
 		}
 		out = append(out, sum)
 	}
