@@ -318,7 +318,7 @@ func (h *AdminHandler) Notifications(c *gin.Context) {
 		since = floor
 	}
 	list, _, err := h.appts.List(c.Request.Context(), repository.AppointmentFilter{
-		CreatedAfter: &since, NewestFirst: true, Limit: 50,
+		Status: domain.StatusConfirmed, CreatedAfter: &since, NewestFirst: true, Limit: 50,
 	})
 	if err != nil {
 		fail(c, err)

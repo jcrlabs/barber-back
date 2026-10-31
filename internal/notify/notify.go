@@ -70,11 +70,13 @@ func WhatsAppNumber(p string) string {
 	return d
 }
 
+var weekdays = [...]string{"Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"}
+
 func (n *Notifier) message(a *domain.Appointment) (title, body string) {
 	start := a.StartsAt.In(n.cfg.Location)
 	title = fmt.Sprintf("Nueva cita · %s %s", start.Format("02/01"), start.Format("15:04"))
-	body = fmt.Sprintf("%s\n%s con %s\n%s a las %s\nTel: %s",
-		a.ClientName, a.ServiceName, a.BarberName, start.Format("Mon 02/01/2006"), start.Format("15:04"), a.ClientPhone)
+	body = fmt.Sprintf("%s\n%s con %s\n%s %s a las %s\nTel: %s",
+		a.ClientName, a.ServiceName, a.BarberName, weekdays[start.Weekday()], start.Format("02/01/2006"), start.Format("15:04"), a.ClientPhone)
 	if a.Notes != "" {
 		body += "\nNota: " + a.Notes
 	}

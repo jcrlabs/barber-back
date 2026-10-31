@@ -48,9 +48,13 @@ Capas (`internal/`):
 | GET | `/meta` · `/services` · `/barbers` | público | |
 | GET | `/availability?service_id&date[&barber_id]` | público | |
 | GET | `/availability/days?service_id[&barber_id&from&days]` | público | |
-| POST | `/appointments` · GET `/appointments/mine` · POST `/appointments/:id/cancel` | cliente | 20/h reservas |
-| GET | `/staff/agenda?from&to` · POST `/staff/appointments/:id/status` | barbero/admin | |
+| POST | `/appointments` (teléfono obligatorio) · GET `/appointments/mine` · POST `/appointments/:id/cancel` | usuario | 20/h reservas |
+| GET | `/staff/agenda?from&to` · POST `/staff/appointments/:id/status` | admin | |
 | * | `/admin/{stats,services,barbers,appointments,users}` | admin | |
+| GET | `/admin/notifications?since` (reservas nuevas, para la campana del panel) | admin | |
+| GET/POST/DELETE | `/admin/overrides` (días cerrados, horarios especiales y franjas bloqueadas) | admin | |
+
+Roles: `client` (usuario) y `admin`. Cada reserva nueva se avisa por ntfy y/o Telegram (`NTFY_URL`, `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) con botones para llamar y escribir por WhatsApp al cliente.
 
 Límite global: 200 peticiones/min por IP en `/api`.
 
