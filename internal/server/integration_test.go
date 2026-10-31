@@ -393,6 +393,30 @@ func TestEndToEndBookingFlow(t *testing.T) {
 		t.Fatalf("unlinked admin staff/me: %d", code)
 	}
 
+	// Rol y ficha van juntos: el admin ve la cuenta enlazada; quitar el rol suelta la ficha y darlo crea una.
+	_, _, linkedList := boss.do("GET", "/api/v1/admin/barbers", nil)
+	if acc, _ := linkedList[0].(map[string]any)["account"].(map[string]any); acc == nil || acc["email"] != loserEmail {
+		t.Fatalf("linked account not shown: %v", linkedList)
+	}
+	if code, _, _ := boss.do("PATCH", "/api/v1/admin/users/"+loserID+"/role", map[string]any{"role": "client"}); code != 200 {
+		t.Fatalf("demote barber: %d", code)
+	}
+	loser.do("POST", "/api/v1/auth/login", map[string]any{"email": loserEmail, "password": "navaja2026"})
+	if code, body, _ := loser.do("GET", "/api/v1/staff/me", nil); code != 403 {
+		t.Fatalf("demoted barber still has panel: %d %v", code, body)
+	}
+	if code, _, _ := boss.do("PATCH", "/api/v1/admin/users/"+loserID+"/role", map[string]any{"role": "barber"}); code != 200 {
+		t.Fatalf("promote to barber: %d", code)
+	}
+	loser.do("POST", "/api/v1/auth/login", map[string]any{"email": loserEmail, "password": "navaja2026"})
+	code, again, _ := loser.do("GET", "/api/v1/staff/me", nil)
+	if code != 200 || again["barber"].(map[string]any)["id"] == barberID {
+		t.Fatalf("promotion did not create a fresh barber profile: %d %v", code, again)
+	}
+	if _, _, all := boss.do("GET", "/api/v1/admin/barbers", nil); len(all) != 2 {
+		t.Fatalf("expected original + new barber profile, got %d", len(all))
+	}
+
 	// El registro exige teléfono.
 	if code, _, _ := (&client{t: t, h: h}).do("POST", "/api/v1/auth/register", map[string]any{"name": "Sin Tel", "email": "sintel@test.es", "password": "navaja2026"}); code != 400 {
 		t.Fatalf("register without phone: %d", code)

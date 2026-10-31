@@ -156,6 +156,12 @@ func (r *CatalogRepository) GetBarberByUser(ctx context.Context, userID uuid.UUI
 	return b, err
 }
 
+// UnlinkUser suelta la ficha de barbero de una cuenta (la ficha y su historial se conservan).
+func (r *CatalogRepository) UnlinkUser(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `UPDATE barbers SET user_id = NULL, updated_at = now() WHERE user_id = $1`, userID)
+	return mapErr(err)
+}
+
 // ReplaceHours sustituye el horario semanal del barbero.
 func (r *CatalogRepository) ReplaceHours(ctx context.Context, barberID uuid.UUID, hours []domain.WorkingHours) error {
 	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {

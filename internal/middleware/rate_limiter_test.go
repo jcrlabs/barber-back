@@ -129,8 +129,9 @@ func TestRateLimitUserKeysByUser(t *testing.T) {
 		return w.Code
 	}
 	a, b := uuid.NewString(), uuid.NewString()
-	if do(a) != 200 || do(a) != 200 || do(a) != 429 {
-		t.Fatal("user a not limited at 3rd request")
+	got := []int{do(a), do(a), do(a)}
+	if got[0] != 200 || got[1] != 200 || got[2] != 429 {
+		t.Fatalf("user a: got %v, want [200 200 429]", got)
 	}
 	if do(b) != 200 {
 		t.Fatal("user b blocked by user a sharing the IP")

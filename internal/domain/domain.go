@@ -74,6 +74,14 @@ type Barber struct {
 	AvatarURL string         `json:"avatar_url"`
 	Active    bool           `json:"active"`
 	Hours     []WorkingHours `json:"hours"`
+	// Account es la cuenta enlazada; solo se rellena en el panel de admin.
+	Account *BarberAccount `json:"account,omitempty"`
+}
+
+type BarberAccount struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Role  Role   `json:"role"`
 }
 
 // BarberNotify son los canales por los que un barbero recibe sus reservas.

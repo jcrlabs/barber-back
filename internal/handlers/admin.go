@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"time"
@@ -175,6 +176,15 @@ func (h *AdminHandler) ListBarbers(c *gin.Context) {
 		fail(c, err)
 		return
 	}
+	// Pocas fichas: resolvemos la cuenta enlazada de cada una para mostrarla en el panel.
+	for i := range list {
+		if list[i].UserID == nil {
+			continue
+		}
+		if u, err := h.users.FindByID(c.Request.Context(), *list[i].UserID); err == nil {
+			list[i].Account = &domain.BarberAccount{Name: u.Name, Email: u.Email, Role: u.Role}
+		}
+	}
 	c.JSON(http.StatusOK, list)
 }
 
@@ -195,6 +205,11 @@ func (h *AdminHandler) UpdateBarber(c *gin.Context) {
 	if !ok {
 		return
 	}
+	prev, err := h.catalog.GetBarber(c.Request.Context(), id)
+	if err != nil {
+		fail(c, err)
+		return
+	}
 	b, ok := h.barberFromRequest(c, id)
 	if !ok {
 		return
@@ -202,6 +217,15 @@ func (h *AdminHandler) UpdateBarber(c *gin.Context) {
 	if err := h.catalog.UpdateBarber(c.Request.Context(), b); err != nil {
 		fail(c, err)
 		return
+	}
+	// La cuenta que deja de estar enlazada pierde el rol de barbero (los admins lo conservan todo).
+	if prev.UserID != nil && (b.UserID == nil || *b.UserID != *prev.UserID) {
+		if u, err := h.users.FindByID(c.Request.Context(), *prev.UserID); err == nil && u.Role == domain.RoleBarber {
+			if err := h.users.SetRole(c.Request.Context(), u.ID, domain.RoleClient); err != nil {
+				fail(c, err)
+				return
+			}
+		}
 	}
 	c.JSON(http.StatusOK, b)
 }
@@ -289,15 +313,35 @@ func (h *AdminHandler) SetUserRole(c *gin.Context) {
 		badRequest(c, "you cannot remove your own admin role")
 		return
 	}
-	if err := h.users.SetRole(c.Request.Context(), id, req.Role); err != nil {
-		fail(c, err)
-		return
-	}
 	u, err := h.users.FindByID(c.Request.Context(), id)
 	if err != nil {
 		fail(c, err)
 		return
 	}
+	if err := h.users.SetRole(c.Request.Context(), id, req.Role); err != nil {
+		fail(c, err)
+		return
+	}
+	// Rol y ficha de barbero van juntos: ser barbero crea su ficha; dejar de serlo la suelta.
+	switch req.Role {
+	case domain.RoleBarber:
+		if _, err := h.catalog.GetBarberByUser(c.Request.Context(), id); errors.Is(err, domain.ErrNotLinked) {
+			b := &domain.Barber{UserID: &id, Name: u.Name, Title: "Barbero", Active: true, Hours: []domain.WorkingHours{}}
+			if err := h.catalog.CreateBarber(c.Request.Context(), b); err != nil {
+				fail(c, err)
+				return
+			}
+		} else if err != nil {
+			fail(c, err)
+			return
+		}
+	case domain.RoleClient:
+		if err := h.catalog.UnlinkUser(c.Request.Context(), id); err != nil {
+			fail(c, err)
+			return
+		}
+	}
+	u.Role = req.Role
 	c.JSON(http.StatusOK, u)
 }
 
