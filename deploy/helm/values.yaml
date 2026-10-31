@@ -42,12 +42,14 @@ config:
   publicUrl: ""
   corsAllowedOrigins: ""
   trustedProxies: "10.0.0.0/8"
+  # "cloudflare": IP real del cliente desde CF-Connecting-IP. Solo si TODO el tráfico entra por Cloudflare.
+  trustedPlatform: ""
   dbHost: barber-postgres
   dbPort: "5432"
   dbName: barber
   dbSslMode: disable
   shopTimezone: Europe/Madrid
-  slotStepMin: "15"
+  slotStepMin: "30"
   bookingLeadMin: "60"
   bookingWindowDays: "45"
   cancelWindowMin: "120"
@@ -56,7 +58,8 @@ config:
 
 # SealedSecret gestionado en jcrlabs-infra. Claves:
 # DB_USER, DB_PASSWORD, JWT_PRIVATE_KEY, ADMIN_EMAILS, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
-# NTFY_URL, NTFY_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (avisos de reservas nuevas, opcionales)
+# NTFY_URL, NTFY_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (avisos de reservas nuevas, opcionales),
+# SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM (avisos por email a los barberos, opcionales)
 secretName: barber-back-secrets
 
 postgres:

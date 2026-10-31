@@ -8,46 +8,34 @@ import (
 	"github.com/jcrlabs/barber-back/internal/repository"
 )
 
-// SeedDemo crea una carta de servicios y un equipo de ejemplo si el catálogo está vacío.
+// SeedDemo crea el catálogo inicial de la barbería si está vacío: un único servicio (corte de 30 min)
+// y un único barbero (Edgar) con su horario. Desde el panel de admin se ajusta todo después.
 func SeedDemo(ctx context.Context, catalog *repository.CatalogRepository) error {
+	return catalog.WithSeedLock(ctx, func() error { return seed(ctx, catalog) })
+}
+
+func seed(ctx context.Context, catalog *repository.CatalogRepository) error {
 	empty, err := catalog.IsEmpty(ctx)
 	if err != nil || !empty {
 		return err
 	}
 
-	services := []domain.Service{
-		{Name: "Corte clásico", Description: "Tijera y máquina, lavado y peinado.", DurationMin: 30, PriceCents: 1800, SortOrder: 1},
-		{Name: "Skin fade", Description: "Degradado a piel con acabado a navaja.", DurationMin: 45, PriceCents: 2200, SortOrder: 2},
-		{Name: "Arreglo de barba", Description: "Perfilado, toalla caliente y aceite.", DurationMin: 20, PriceCents: 1200, SortOrder: 3},
-		{Name: "Afeitado ritual", Description: "Navaja libre, toallas calientes y bálsamo.", DurationMin: 40, PriceCents: 2500, SortOrder: 4},
-		{Name: "Corte + barba", Description: "El combo completo de la casa.", DurationMin: 60, PriceCents: 3000, SortOrder: 5},
-	}
-	for i := range services {
-		services[i].Active = true
-		if err := catalog.CreateService(ctx, &services[i]); err != nil {
-			return err
-		}
+	corte := domain.Service{Name: "Corte", Description: "Corte de pelo con Edgar.", DurationMin: 30, SortOrder: 1, Active: true}
+	if err := catalog.CreateService(ctx, &corte); err != nil {
+		return err
 	}
 
-	weekdays := func(start, end int, days ...int) []domain.WorkingHours {
-		var out []domain.WorkingHours
-		for _, d := range days {
-			out = append(out, domain.WorkingHours{Weekday: d, StartMin: start, EndMin: end})
-		}
-		return out
-	}
-	split := append(weekdays(10*60, 14*60, 2, 3, 4, 5, 6), weekdays(16*60, 20*60+30, 2, 3, 4, 5)...)
-	barbers := []domain.Barber{
-		{Name: "Edgar", Title: "Fundador · Master barber", Bio: "Quince años con la navaja. Obsesionado con los fades limpios y el detalle.", Hours: split},
-		{Name: "Lucía Ortega", Title: "Barba & afeitado", Bio: "Especialista en barbas y afeitado tradicional con toalla caliente.", Hours: weekdays(9*60+30, 17*60+30, 1, 2, 3, 4, 5)},
-		{Name: "Dani Ruiz", Title: "Cortes modernos", Bio: "Texturas, crops y diseños a máquina.", Hours: weekdays(12*60, 20*60, 2, 3, 4, 5, 6)},
-	}
-	for i := range barbers {
-		barbers[i].Active = true
-		if err := catalog.CreateBarber(ctx, &barbers[i]); err != nil {
-			return err
+	var hours []domain.WorkingHours
+	for _, d := range []int{2, 3, 4, 5, 6} { // martes a sábado
+		hours = append(hours, domain.WorkingHours{Weekday: d, StartMin: 10 * 60, EndMin: 14 * 60})
+		if d != 6 {
+			hours = append(hours, domain.WorkingHours{Weekday: d, StartMin: 16 * 60, EndMin: 20 * 60})
 		}
 	}
-	slog.Info("demo catalog seeded", slog.Int("services", len(services)), slog.Int("barbers", len(barbers)))
+	edgar := domain.Barber{Name: "Edgar", Title: "Barbero", Hours: hours, Active: true}
+	if err := catalog.CreateBarber(ctx, &edgar); err != nil {
+		return err
+	}
+	slog.Info("initial catalog seeded")
 	return nil
 }

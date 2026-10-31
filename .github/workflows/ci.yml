@@ -89,4 +89,4 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: |
           helm lint deploy/helm -f deploy/helm/values.yaml -f deploy/helm/values-prod.yaml
-          helm lint deploy/helm -f deploy/helm/values.yaml -f deploy/helm/values-test.yaml
+          helm lint deploy/helm -f deploy/helm/values.yaml -f deploy/helm/values-prod.yaml

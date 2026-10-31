@@ -12,10 +12,11 @@ type Role string
 
 const (
 	RoleClient Role = "client"
+	RoleBarber Role = "barber"
 	RoleAdmin  Role = "admin"
 )
 
-func (r Role) Valid() bool { return r == RoleClient || r == RoleAdmin }
+func (r Role) Valid() bool { return r == RoleClient || r == RoleBarber || r == RoleAdmin }
 
 type AppointmentStatus string
 
@@ -73,6 +74,23 @@ type Barber struct {
 	AvatarURL string         `json:"avatar_url"`
 	Active    bool           `json:"active"`
 	Hours     []WorkingHours `json:"hours"`
+	// Account es la cuenta enlazada; solo se rellena en el panel de admin.
+	Account *BarberAccount `json:"account,omitempty"`
+}
+
+type BarberAccount struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Role  Role   `json:"role"`
+}
+
+// BarberNotify son los canales por los que un barbero recibe sus reservas.
+// Nunca se expone en las rutas públicas.
+type BarberNotify struct {
+	NtfyTopic     string `json:"ntfy_topic"`
+	Email         string `json:"email"`
+	WhatsAppPhone string `json:"whatsapp_phone"`
+	CallMeBotKey  string `json:"callmebot_key"`
 }
 
 type Appointment struct {
@@ -134,5 +152,6 @@ var (
 	ErrTooLateToCancel    = errors.New("too late to cancel")
 	ErrInvalidState       = errors.New("invalid appointment state")
 	ErrPhoneRequired      = errors.New("a contact phone is required")
+	ErrNotLinked          = errors.New("your account is not linked to a barber profile")
 	ErrWeakPassword       = errors.New("password must be 8-72 characters and include a letter and a number")
 )

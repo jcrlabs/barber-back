@@ -28,7 +28,9 @@ type Config struct {
 	PublicURL      string // URL pública de la app (front), p.ej. https://barber.jcrlabs.net
 	AllowedOrigins []string
 	TrustedProxies []string
-	MaxRequestSize int64
+	// TrustedPlatform="cloudflare" toma la IP real del cliente de CF-Connecting-IP (solo si todo el tráfico entra por Cloudflare).
+	TrustedPlatform string
+	MaxRequestSize  int64
 
 	JWTPrivateKey *rsa.PrivateKey
 	JWTIssuer     string
@@ -36,6 +38,10 @@ type Config struct {
 	RefreshTTL    time.Duration
 
 	AdminEmails map[string]struct{}
+
+	// Cuenta admin inicial (usuario + contraseña). Solo se crea si no existe; luego se cambia desde el perfil.
+	BootstrapAdminLogin    string
+	BootstrapAdminPassword string
 
 	Google OAuthProvider
 	GitHub OAuthProvider
@@ -53,6 +59,14 @@ type Config struct {
 	NtfyToken     string
 	TelegramToken string
 	TelegramChat  string
+	// NtfyBase es el servidor ntfy de los topics personales de cada barbero.
+	NtfyBase string
+	SMTP     SMTPConfig
+}
+
+// SMTPConfig habilita los avisos por email a los barberos (p.ej. Gmail con contraseña de aplicación).
+type SMTPConfig struct {
+	Host, Port, User, Password, From string
 }
 
 func (c *Config) IsProduction() bool { return c.Env == "production" }
@@ -62,28 +76,36 @@ func (c *Config) CookieSecure() bool { return strings.HasPrefix(c.PublicURL, "ht
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:            getEnv("APP_ENV", "development"),
-		Port:           getEnv("PORT", "8080"),
-		PublicURL:      strings.TrimRight(getEnv("PUBLIC_URL", "http://localhost:5173"), "/"),
-		AllowedOrigins: splitList(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
-		TrustedProxies: splitList(getEnv("TRUSTED_PROXIES", "10.0.0.0/8,127.0.0.1/32")),
-		MaxRequestSize: int64(getInt("MAX_REQUEST_SIZE_BYTES", 1<<20)),
-		JWTIssuer:      getEnv("JWT_ISSUER", "barber-back"),
-		AccessTTL:      time.Duration(getInt("JWT_ACCESS_TTL_MIN", 15)) * time.Minute,
-		RefreshTTL:     time.Duration(getInt("JWT_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
-		AdminEmails:    map[string]struct{}{},
-		Google:         OAuthProvider{ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
-		GitHub:         OAuthProvider{ClientID: os.Getenv("GITHUB_CLIENT_ID"), ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
-		SlotStep:       time.Duration(getInt("SLOT_STEP_MIN", 15)) * time.Minute,
-		BookingLead:    time.Duration(getInt("BOOKING_LEAD_MIN", 60)) * time.Minute,
-		BookingWindow:  getInt("BOOKING_WINDOW_DAYS", 45),
-		CancelWindow:   time.Duration(getInt("CANCEL_WINDOW_MIN", 120)) * time.Minute,
-		MaxActiveAppt:  getInt("MAX_ACTIVE_APPOINTMENTS", 3),
-		SeedDemoData:   getEnv("SEED_DEMO_DATA", "true") == "true",
-		NtfyURL:        strings.TrimSpace(os.Getenv("NTFY_URL")),
-		NtfyToken:      os.Getenv("NTFY_TOKEN"),
-		TelegramToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChat:   os.Getenv("TELEGRAM_CHAT_ID"),
+		Env:                    getEnv("APP_ENV", "development"),
+		Port:                   getEnv("PORT", "8080"),
+		PublicURL:              strings.TrimRight(getEnv("PUBLIC_URL", "http://localhost:5173"), "/"),
+		AllowedOrigins:         splitList(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
+		TrustedProxies:         splitList(getEnv("TRUSTED_PROXIES", "10.0.0.0/8,127.0.0.1/32")),
+		TrustedPlatform:        strings.ToLower(os.Getenv("TRUSTED_PLATFORM")),
+		MaxRequestSize:         int64(getInt("MAX_REQUEST_SIZE_BYTES", 1<<20)),
+		JWTIssuer:              getEnv("JWT_ISSUER", "barber-back"),
+		AccessTTL:              time.Duration(getInt("JWT_ACCESS_TTL_MIN", 15)) * time.Minute,
+		RefreshTTL:             time.Duration(getInt("JWT_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
+		AdminEmails:            map[string]struct{}{},
+		BootstrapAdminLogin:    strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_LOGIN"))),
+		BootstrapAdminPassword: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+		Google:                 OAuthProvider{ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
+		GitHub:                 OAuthProvider{ClientID: os.Getenv("GITHUB_CLIENT_ID"), ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
+		SlotStep:               time.Duration(getInt("SLOT_STEP_MIN", 30)) * time.Minute,
+		BookingLead:            time.Duration(getInt("BOOKING_LEAD_MIN", 60)) * time.Minute,
+		BookingWindow:          getInt("BOOKING_WINDOW_DAYS", 45),
+		CancelWindow:           time.Duration(getInt("CANCEL_WINDOW_MIN", 120)) * time.Minute,
+		MaxActiveAppt:          getInt("MAX_ACTIVE_APPOINTMENTS", 3),
+		SeedDemoData:           getEnv("SEED_DEMO_DATA", "true") == "true",
+		NtfyURL:                strings.TrimSpace(os.Getenv("NTFY_URL")),
+		NtfyToken:              os.Getenv("NTFY_TOKEN"),
+		TelegramToken:          os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChat:           os.Getenv("TELEGRAM_CHAT_ID"),
+		NtfyBase:               strings.TrimRight(getEnv("NTFY_BASE_URL", "https://ntfy.sh"), "/"),
+		SMTP: SMTPConfig{
+			Host: strings.TrimSpace(os.Getenv("SMTP_HOST")), Port: getEnv("SMTP_PORT", "587"),
+			User: os.Getenv("SMTP_USER"), Password: os.Getenv("SMTP_PASSWORD"), From: os.Getenv("SMTP_FROM"),
+		},
 	}
 
 	for _, e := range splitList(os.Getenv("ADMIN_EMAILS")) {
@@ -114,6 +136,15 @@ func Load() (*Config, error) {
 	}
 	if cfg.NtfyURL != "" && !strings.HasPrefix(cfg.NtfyURL, "https://") && !strings.HasPrefix(cfg.NtfyURL, "http://") {
 		return nil, errors.New("NTFY_URL must be an http(s) URL")
+	}
+	if !strings.HasPrefix(cfg.NtfyBase, "https://") && !strings.HasPrefix(cfg.NtfyBase, "http://") {
+		return nil, errors.New("NTFY_BASE_URL must be an http(s) URL")
+	}
+	if (cfg.SMTP.Host == "") != (cfg.SMTP.From == "") {
+		return nil, errors.New("SMTP_HOST and SMTP_FROM must be set together")
+	}
+	if cfg.TrustedPlatform != "" && cfg.TrustedPlatform != "cloudflare" {
+		return nil, errors.New("TRUSTED_PLATFORM must be empty or cloudflare")
 	}
 	if cfg.SlotStep <= 0 || cfg.BookingWindow <= 0 {
 		return nil, errors.New("SLOT_STEP_MIN and BOOKING_WINDOW_DAYS must be positive")

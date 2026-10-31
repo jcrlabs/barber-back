@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 func TestRateLimiterSlidingWindow(t *testing.T) {
@@ -84,5 +85,55 @@ func TestCSRFGuard(t *testing.T) {
 				t.Fatalf("got %d, want %d", w.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestBlockedAndReset(t *testing.T) {
+	l := &RateLimiter{entries: map[string]*slidingWindow{}, maxHits: 2, window: time.Minute, now: time.Now}
+	if b, _ := l.Blocked("acct:admin"); b {
+		t.Fatal("blocked before any failure")
+	}
+	l.Allow("acct:admin")
+	l.Allow("acct:admin")
+	if b, retry := l.Blocked("acct:admin"); !b || retry <= 0 {
+		t.Fatalf("not blocked after max failures (retry %v)", retry)
+	}
+	// Consultar no consume cupo ni alarga el bloqueo.
+	if b, _ := l.Blocked("acct:admin"); !b {
+		t.Fatal("peek changed state")
+	}
+	l.Reset("acct:admin")
+	if b, _ := l.Blocked("acct:admin"); b {
+		t.Fatal("still blocked after reset")
+	}
+}
+
+func TestRateLimitUserKeysByUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		if u := c.GetHeader("X-User"); u != "" {
+			c.Set(ctxUserID, uuid.MustParse(u))
+		}
+	}, RateLimitUser(2, time.Minute, "slow down"))
+	r.GET("/", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	do := func(user string) int {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "9.9.9.9:1234" // misma IP para todos
+		if user != "" {
+			req.Header.Set("X-User", user)
+		}
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	a, b := uuid.NewString(), uuid.NewString()
+	got := []int{do(a), do(a), do(a)}
+	if got[0] != 200 || got[1] != 200 || got[2] != 429 {
+		t.Fatalf("user a: got %v, want [200 200 429]", got)
+	}
+	if do(b) != 200 {
+		t.Fatal("user b blocked by user a sharing the IP")
 	}
 }

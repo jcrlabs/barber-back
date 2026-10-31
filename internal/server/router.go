@@ -2,11 +2,13 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jcrlabs/barber-back/internal/config"
 	"github.com/jcrlabs/barber-back/internal/domain"
@@ -41,7 +43,10 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	notifier := notify.New(notify.Config{
 		NtfyURL: cfg.NtfyURL, NtfyToken: cfg.NtfyToken, TelegramToken: cfg.TelegramToken,
 		TelegramChat: cfg.TelegramChat, PublicURL: cfg.PublicURL, Location: cfg.ShopTimezone,
-	}, logger)
+		NtfyBase: cfg.NtfyBase, SMTP: notify.SMTPConfig(cfg.SMTP),
+	}, logger).WithRecipients(func(ctx context.Context, barberID uuid.UUID) (*domain.BarberNotify, error) {
+		return catalog.GetNotify(ctx, barberID)
+	})
 	bookingSvc := services.NewBookingService(catalog, appts, services.BookingRules{
 		Location: cfg.ShopTimezone, SlotStep: cfg.SlotStep, LeadTime: cfg.BookingLead,
 		WindowDays: cfg.BookingWindow, CancelWindow: cfg.CancelWindow, MaxActiveAppt: cfg.MaxActiveAppt,
@@ -51,10 +56,21 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 		services.OAuthCredentials{ClientID: cfg.GitHub.ClientID, ClientSecret: cfg.GitHub.ClientSecret},
 	)
 
-	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure())
+	// Los límites de autenticación se guardan en Postgres para que valgan igual en todas las réplicas.
+	limits := repository.NewRateLimitRepository(db)
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for range t.C {
+			if err := limits.Purge(context.Background()); err != nil {
+				logger.Warn("rate limit purge failed", "err", err)
+			}
+		}
+	}()
+	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure()).WithAccountStore(limits)
 	bookingH := handlers.NewBookingHandler(bookingSvc, catalog, appts, users)
-	staffH := handlers.NewStaffHandler(bookingSvc, appts)
-	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone, notifier.Channels())
+	staffH := handlers.NewStaffHandler(bookingSvc, appts, catalog, notifier)
+	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone)
 	healthH := handlers.NewHealthHandler(db)
 
 	if cfg.IsProduction() {
@@ -63,6 +79,11 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	r := gin.New()
 	if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
 		return nil, err
+	}
+	if cfg.TrustedPlatform == "cloudflare" {
+		// Todo el tráfico llega por el túnel de Cloudflare: sin esto, todas las peticiones
+		// parecen venir del balanceador y los límites por IP serían compartidos por todos.
+		r.TrustedPlatform = gin.PlatformCloudflare
 	}
 	r.Use(gin.Recovery(), mw.RequestID(), mw.RequestLogger(logger), mw.SecurityHeaders(cfg.CookieSecure()))
 	r.Use(cors.New(cors.Config{
@@ -85,12 +106,12 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	// ── Auth (públicas, con límites estrictos) ──
 	authG := api.Group("/auth")
 	csrf := mw.CSRFGuard(cfg.AllowedOrigins)
-	authG.POST("/register", mw.RateLimit(3, time.Hour, "too many registrations, try again later"), authH.Register)
-	authG.POST("/login", mw.RateLimit(10, 15*time.Minute, "too many login attempts, try again later"), authH.Login)
-	authG.POST("/refresh", mw.RateLimit(60, 15*time.Minute, "too many refresh attempts"), csrf, authH.Refresh)
+	authG.POST("/register", mw.SharedRateLimit(limits, "register", 3, time.Hour, "too many registrations, try again later"), authH.Register)
+	authG.POST("/login", mw.SharedRateLimit(limits, "login", 10, 15*time.Minute, "too many login attempts, try again later"), authH.Login)
+	authG.POST("/refresh", mw.SharedRateLimit(limits, "refresh", 60, 15*time.Minute, "too many refresh attempts"), csrf, authH.Refresh)
 	authG.POST("/logout", csrf, authH.Logout)
 	authG.GET("/providers", authH.Providers)
-	oauthLimit := mw.RateLimit(20, 15*time.Minute, "too many social login attempts")
+	oauthLimit := mw.SharedRateLimit(limits, "oauth", 40, 15*time.Minute, "too many social login attempts")
 	authG.GET("/oauth/:provider/start", oauthLimit, authH.OAuthStart)
 	authG.GET("/oauth/:provider/callback", oauthLimit, authH.OAuthCallback)
 
@@ -103,23 +124,35 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 
 	// ── Usuario autenticado ──
 	authed := api.Group("")
-	authed.Use(mw.AuthRequired(authSvc))
+	// Además del límite por IP, cada usuario tiene su propio cupo: no se lo salta cambiando de IP.
+	authed.Use(mw.AuthRequired(authSvc), mw.RateLimitUser(300, time.Minute, "too many requests"))
 	authed.GET("/auth/me", authH.Me)
-	authed.PATCH("/auth/me", authH.UpdateMe)
-	authed.POST("/auth/me/password", mw.RateLimit(5, 15*time.Minute, "too many password changes"), authH.ChangePassword)
-	authed.POST("/auth/logout-all", authH.LogoutAll)
+	authed.PATCH("/auth/me", mw.RateLimitUser(20, time.Hour, "too many profile changes"), authH.UpdateMe)
+	authed.POST("/auth/me/password", mw.SharedRateLimit(limits, "password", 5, 15*time.Minute, "too many password changes"),
+		mw.RateLimitUser(5, 15*time.Minute, "too many password changes"), authH.ChangePassword)
+	authed.POST("/auth/logout-all", mw.RateLimitUser(10, time.Hour, "too many requests"), authH.LogoutAll)
 
 	authed.GET("/appointments/mine", bookingH.Mine)
-	authed.POST("/appointments", mw.RateLimit(20, time.Hour, "too many bookings, try again later"), bookingH.Book)
-	authed.POST("/appointments/:id/cancel", bookingH.Cancel)
+	authed.POST("/appointments", mw.RateLimit(20, time.Hour, "too many bookings, try again later"),
+		mw.RateLimitUser(10, time.Hour, "too many bookings, try again later"), bookingH.Book)
+	authed.POST("/appointments/:id/cancel", mw.RateLimitUser(20, time.Hour, "too many cancellations"), bookingH.Cancel)
 
-	// ── Agenda (solo admins) ──
-	staff := authed.Group("/staff", mw.RequireRole(domain.RoleAdmin))
+	// ── Panel de barbero (barberos ven lo suyo; el admin, toda la barbería) ──
+	staff := authed.Group("/staff", mw.RequireRole(domain.RoleBarber, domain.RoleAdmin))
 	staff.GET("/agenda", staffH.Agenda)
-	staff.POST("/appointments/:id/status", staffH.SetStatus)
+	staffWrite := mw.RateLimitUser(300, time.Hour, "too many changes, slow down")
+	staff.POST("/appointments/:id/status", staffWrite, staffH.SetStatus)
+	staff.GET("/notifications", staffH.Notifications)
+	staff.GET("/overrides", staffH.ListOverrides)
+	staff.POST("/overrides", staffWrite, staffH.CreateOverride)
+	staff.DELETE("/overrides/:id", staffWrite, staffH.DeleteOverride)
+	staff.GET("/me", staffH.Me)
+	staff.PUT("/me/hours", staffWrite, staffH.UpdateMyHours)
+	staff.PUT("/me/notify", staffWrite, staffH.UpdateMyNotify)
+	staff.POST("/me/notify/test", mw.RateLimitUser(5, 15*time.Minute, "too many test notifications"), staffH.TestMyNotify)
 
 	// ── Admin ──
-	admin := authed.Group("/admin", mw.RequireRole(domain.RoleAdmin))
+	admin := authed.Group("/admin", mw.RequireRole(domain.RoleAdmin), mw.RateLimitUser(600, time.Hour, "too many admin requests"))
 	admin.GET("/stats", adminH.Stats)
 	admin.GET("/services", adminH.ListServices)
 	admin.POST("/services", adminH.CreateService)
@@ -130,10 +163,6 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	admin.PUT("/barbers/:id", adminH.UpdateBarber)
 	admin.DELETE("/barbers/:id", adminH.DeleteBarber)
 	admin.GET("/appointments", adminH.ListAppointments)
-	admin.GET("/notifications", adminH.Notifications)
-	admin.GET("/overrides", adminH.ListOverrides)
-	admin.POST("/overrides", adminH.CreateOverride)
-	admin.DELETE("/overrides/:id", adminH.DeleteOverride)
 	admin.GET("/users", adminH.ListUsers)
 	admin.PATCH("/users/:id/role", adminH.SetUserRole)
 

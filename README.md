@@ -79,7 +79,6 @@ Si un proveedor no tiene credenciales, simplemente no se ofrece en el login.
 
 ## Despliegue
 
-- `develop` → imagen `develop-<sha>` → `values-test.yaml` → ArgoCD `barber-back-test` (namespace `barber-test`).
 - tag `vX.Y.Z` → imagen `vX.Y.Z` → `values-prod.yaml` en `main` → ArgoCD `barber-back` (namespace `barber`).
 
 Secretos en `jcrlabs-infra` como SealedSecret `barber-back-secrets` (`DB_USER`, `DB_PASSWORD`, `JWT_PRIVATE_KEY`, `ADMIN_EMAILS`, `GOOGLE_*`, `GITHUB_*`), generados con `scripts/seal-barber-secrets.sh`.
