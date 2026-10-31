@@ -20,7 +20,7 @@ func seed(ctx context.Context, catalog *repository.CatalogRepository) error {
 		return err
 	}
 
-	corte := domain.Service{Name: "Corte", Description: "Corte de pelo con Edgar.", DurationMin: 30, PriceCents: 1500, SortOrder: 1, Active: true}
+	corte := domain.Service{Name: "Corte", Description: "Corte de pelo con Edgar.", DurationMin: 30, SortOrder: 1, Active: true}
 	if err := catalog.CreateService(ctx, &corte); err != nil {
 		return err
 	}
