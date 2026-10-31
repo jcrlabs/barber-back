@@ -69,6 +69,12 @@ func run(logger *slog.Logger) error {
 		}
 	}
 
+	if cfg.BootstrapAdminLogin != "" && cfg.BootstrapAdminPassword != "" {
+		if err := server.BootstrapAdmin(ctx, repository.NewUserRepository(db), cfg.BootstrapAdminLogin, cfg.BootstrapAdminPassword); err != nil {
+			slog.Warn("bootstrap admin failed", slog.String("error", err.Error()))
+		}
+	}
+
 	app, err := server.New(cfg, db, logger)
 	if err != nil {
 		return err

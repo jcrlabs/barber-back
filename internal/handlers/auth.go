@@ -66,7 +66,7 @@ type registerRequest struct {
 	Name     string `json:"name" binding:"required,min=2,max=80"`
 	Email    string `json:"email" binding:"required,email,max=254"`
 	Password string `json:"password" binding:"required,min=8,max=72"`
-	Phone    string `json:"phone" binding:"omitempty,max=30,phone"`
+	Phone    string `json:"phone" binding:"required,max=30,phone"`
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -82,8 +82,9 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	h.writeSession(c, http.StatusCreated, s)
 }
 
+// loginRequest acepta un email o un nombre de usuario (p.ej. la cuenta "admin" de la barbería).
 type loginRequest struct {
-	Email    string `json:"email" binding:"required,email,max=254"`
+	Email    string `json:"email" binding:"required,max=254"`
 	Password string `json:"password" binding:"required,max=72"`
 }
 

@@ -122,13 +122,13 @@ func TestEndToEndBookingFlow(t *testing.T) {
 
 	anon := &client{t: t, h: h}
 	code, _, services := anon.do("GET", "/api/v1/services", nil)
-	if code != 200 || len(services) != 5 {
+	if code != 200 || len(services) != 1 {
 		t.Fatalf("services: %d %v", code, services)
 	}
 	serviceID := services[0].(map[string]any)["id"].(string)
 
 	code, _, barbers := anon.do("GET", "/api/v1/barbers", nil)
-	if code != 200 || len(barbers) != 3 {
+	if code != 200 || len(barbers) != 1 {
 		t.Fatalf("barbers: %d", code)
 	}
 
@@ -178,7 +178,7 @@ func TestEndToEndBookingFlow(t *testing.T) {
 
 	// Dos clientes intentan el mismo hueco a la vez: exactamente uno gana.
 	bob := &client{t: t, h: h}
-	bob.do("POST", "/api/v1/auth/register", map[string]any{"name": "Bob", "email": "bob@test.es", "password": "navaja2026"})
+	bob.do("POST", "/api/v1/auth/register", map[string]any{"name": "Bob", "email": "bob@test.es", "password": "navaja2026", "phone": "+34 600 000 001"})
 	// Sin teléfono no se puede reservar: la barbería necesita poder llamar.
 	noPhone := map[string]any{"service_id": serviceID, "barber_id": barberID, "starts_at": startsAt}
 	if code, _, _ := ana.do("POST", "/api/v1/appointments", noPhone); code != 400 {
@@ -319,5 +319,24 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	}
 	if code, _, _ := loser.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "closed"}); code != 403 {
 		t.Fatalf("client created override: %d", code)
+	}
+
+	// Cuenta admin inicial: usuario "admin" (sin email) que entra por el mismo login.
+	if err := BootstrapAdmin(ctx, repository.NewUserRepository(db), "admin", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(ctx, repository.NewUserRepository(db), "admin", "otra"); err != nil {
+		t.Fatal(err) // idempotente: no pisa la contraseña existente
+	}
+	boss := &client{t: t, h: h}
+	if code, body, _ := boss.do("POST", "/api/v1/auth/login", map[string]any{"email": "admin", "password": "admin"}); code != 200 || body["user"].(map[string]any)["role"] != "admin" {
+		t.Fatalf("bootstrap admin login: %d %v", code, body)
+	}
+	if code, _, _ := boss.do("GET", "/api/v1/admin/stats", nil); code != 200 {
+		t.Fatalf("bootstrap admin stats: %d", code)
+	}
+	// El registro exige teléfono.
+	if code, _, _ := (&client{t: t, h: h}).do("POST", "/api/v1/auth/register", map[string]any{"name": "Sin Tel", "email": "sintel@test.es", "password": "navaja2026"}); code != 400 {
+		t.Fatalf("register without phone: %d", code)
 	}
 }

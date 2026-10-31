@@ -37,6 +37,10 @@ type Config struct {
 
 	AdminEmails map[string]struct{}
 
+	// Cuenta admin inicial (usuario + contraseña). Solo se crea si no existe; luego se cambia desde el perfil.
+	BootstrapAdminLogin    string
+	BootstrapAdminPassword string
+
 	Google OAuthProvider
 	GitHub OAuthProvider
 
@@ -62,28 +66,30 @@ func (c *Config) CookieSecure() bool { return strings.HasPrefix(c.PublicURL, "ht
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:            getEnv("APP_ENV", "development"),
-		Port:           getEnv("PORT", "8080"),
-		PublicURL:      strings.TrimRight(getEnv("PUBLIC_URL", "http://localhost:5173"), "/"),
-		AllowedOrigins: splitList(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
-		TrustedProxies: splitList(getEnv("TRUSTED_PROXIES", "10.0.0.0/8,127.0.0.1/32")),
-		MaxRequestSize: int64(getInt("MAX_REQUEST_SIZE_BYTES", 1<<20)),
-		JWTIssuer:      getEnv("JWT_ISSUER", "barber-back"),
-		AccessTTL:      time.Duration(getInt("JWT_ACCESS_TTL_MIN", 15)) * time.Minute,
-		RefreshTTL:     time.Duration(getInt("JWT_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
-		AdminEmails:    map[string]struct{}{},
-		Google:         OAuthProvider{ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
-		GitHub:         OAuthProvider{ClientID: os.Getenv("GITHUB_CLIENT_ID"), ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
-		SlotStep:       time.Duration(getInt("SLOT_STEP_MIN", 15)) * time.Minute,
-		BookingLead:    time.Duration(getInt("BOOKING_LEAD_MIN", 60)) * time.Minute,
-		BookingWindow:  getInt("BOOKING_WINDOW_DAYS", 45),
-		CancelWindow:   time.Duration(getInt("CANCEL_WINDOW_MIN", 120)) * time.Minute,
-		MaxActiveAppt:  getInt("MAX_ACTIVE_APPOINTMENTS", 3),
-		SeedDemoData:   getEnv("SEED_DEMO_DATA", "true") == "true",
-		NtfyURL:        strings.TrimSpace(os.Getenv("NTFY_URL")),
-		NtfyToken:      os.Getenv("NTFY_TOKEN"),
-		TelegramToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChat:   os.Getenv("TELEGRAM_CHAT_ID"),
+		Env:                    getEnv("APP_ENV", "development"),
+		Port:                   getEnv("PORT", "8080"),
+		PublicURL:              strings.TrimRight(getEnv("PUBLIC_URL", "http://localhost:5173"), "/"),
+		AllowedOrigins:         splitList(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")),
+		TrustedProxies:         splitList(getEnv("TRUSTED_PROXIES", "10.0.0.0/8,127.0.0.1/32")),
+		MaxRequestSize:         int64(getInt("MAX_REQUEST_SIZE_BYTES", 1<<20)),
+		JWTIssuer:              getEnv("JWT_ISSUER", "barber-back"),
+		AccessTTL:              time.Duration(getInt("JWT_ACCESS_TTL_MIN", 15)) * time.Minute,
+		RefreshTTL:             time.Duration(getInt("JWT_REFRESH_TTL_DAYS", 30)) * 24 * time.Hour,
+		AdminEmails:            map[string]struct{}{},
+		BootstrapAdminLogin:    strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_LOGIN"))),
+		BootstrapAdminPassword: os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+		Google:                 OAuthProvider{ClientID: os.Getenv("GOOGLE_CLIENT_ID"), ClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET")},
+		GitHub:                 OAuthProvider{ClientID: os.Getenv("GITHUB_CLIENT_ID"), ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET")},
+		SlotStep:               time.Duration(getInt("SLOT_STEP_MIN", 30)) * time.Minute,
+		BookingLead:            time.Duration(getInt("BOOKING_LEAD_MIN", 60)) * time.Minute,
+		BookingWindow:          getInt("BOOKING_WINDOW_DAYS", 45),
+		CancelWindow:           time.Duration(getInt("CANCEL_WINDOW_MIN", 120)) * time.Minute,
+		MaxActiveAppt:          getInt("MAX_ACTIVE_APPOINTMENTS", 3),
+		SeedDemoData:           getEnv("SEED_DEMO_DATA", "true") == "true",
+		NtfyURL:                strings.TrimSpace(os.Getenv("NTFY_URL")),
+		NtfyToken:              os.Getenv("NTFY_TOKEN"),
+		TelegramToken:          os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChat:           os.Getenv("TELEGRAM_CHAT_ID"),
 	}
 
 	for _, e := range splitList(os.Getenv("ADMIN_EMAILS")) {

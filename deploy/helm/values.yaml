@@ -47,7 +47,7 @@ config:
   dbName: barber
   dbSslMode: disable
   shopTimezone: Europe/Madrid
-  slotStepMin: "15"
+  slotStepMin: "30"
   bookingLeadMin: "60"
   bookingWindowDays: "45"
   cancelWindowMin: "120"
