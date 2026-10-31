@@ -211,9 +211,10 @@ func (f *fakeCatalog) ListOverrides(_ context.Context, from, to string) ([]domai
 	return out, nil
 }
 
-type fakeNotifier struct{ got []*domain.Appointment }
+type fakeNotifier struct{ got, cancelled []*domain.Appointment }
 
 func (n *fakeNotifier) NewBooking(a *domain.Appointment) { n.got = append(n.got, a) }
+func (n *fakeNotifier) Cancelled(a *domain.Appointment)  { n.cancelled = append(n.cancelled, a) }
 
 func (f *fakeCatalog) GetService(_ context.Context, id uuid.UUID) (*domain.Service, error) {
 	if s, ok := f.services[id]; ok {

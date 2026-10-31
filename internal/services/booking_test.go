@@ -184,8 +184,12 @@ func TestCancelAndStaffStatus(t *testing.T) {
 	if _, err := f.svc.CancelByClient(ctx, uuid.New(), a.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("foreign cancel: got %v", err)
 	}
-	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCompleted); !errors.Is(err, domain.ErrInvalidState) {
+	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCompleted, nil); !errors.Is(err, domain.ErrInvalidState) {
 		t.Fatalf("complete before start: got %v", err)
+	}
+	other := uuid.New()
+	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCancelled, &other); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign barber status: got %v", err)
 	}
 
 	f.nowValue = f.tenAM.Add(-time.Hour) // dentro de la ventana de 2h
@@ -194,11 +198,11 @@ func TestCancelAndStaffStatus(t *testing.T) {
 	}
 
 	f.nowValue = f.tenAM.Add(35 * time.Minute)
-	got, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCompleted)
+	got, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusCompleted, nil)
 	if err != nil || got.Status != domain.StatusCompleted {
 		t.Fatalf("complete: %v %v", got, err)
 	}
-	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusNoShow); !errors.Is(err, domain.ErrInvalidState) {
+	if _, err := f.svc.SetStatusByStaff(ctx, a.ID, domain.StatusNoShow, nil); !errors.Is(err, domain.ErrInvalidState) {
 		t.Fatalf("re-transition: got %v", err)
 	}
 }

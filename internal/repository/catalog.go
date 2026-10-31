@@ -147,6 +147,48 @@ func (r *CatalogRepository) getBarberWhere(ctx context.Context, cond string, arg
 	return &b, nil
 }
 
+// GetBarberByUser devuelve el barbero enlazado a la cuenta, o ErrNotLinked.
+func (r *CatalogRepository) GetBarberByUser(ctx context.Context, userID uuid.UUID) (*domain.Barber, error) {
+	b, err := r.getBarberWhere(ctx, `user_id = $1`, userID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return nil, domain.ErrNotLinked
+	}
+	return b, err
+}
+
+// ReplaceHours sustituye el horario semanal del barbero.
+func (r *CatalogRepository) ReplaceHours(ctx context.Context, barberID uuid.UUID, hours []domain.WorkingHours) error {
+	return pgx.BeginFunc(ctx, r.db, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE barbers SET updated_at = now() WHERE id = $1`, barberID); err != nil {
+			return mapErr(err)
+		}
+		return replaceHours(ctx, tx, barberID, hours)
+	})
+}
+
+func (r *CatalogRepository) GetNotify(ctx context.Context, barberID uuid.UUID) (*domain.BarberNotify, error) {
+	var n domain.BarberNotify
+	err := r.db.QueryRow(ctx, `SELECT ntfy_topic, notify_email, whatsapp_phone, callmebot_key FROM barbers WHERE id = $1`,
+		barberID).Scan(&n.NtfyTopic, &n.Email, &n.WhatsAppPhone, &n.CallMeBotKey)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &n, nil
+}
+
+// UpdateNotify guarda los canales de aviso; el topic de ntfy no se cambia desde aquí.
+func (r *CatalogRepository) UpdateNotify(ctx context.Context, barberID uuid.UUID, n *domain.BarberNotify) error {
+	tag, err := r.db.Exec(ctx, `UPDATE barbers SET notify_email = $2, whatsapp_phone = $3, callmebot_key = $4, updated_at = now()
+		WHERE id = $1`, barberID, n.Email, n.WhatsAppPhone, n.CallMeBotKey)
+	if err != nil {
+		return mapErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 func (r *CatalogRepository) HoursFor(ctx context.Context, barberID uuid.UUID) ([]domain.WorkingHours, error) {
 	rows, err := r.db.Query(ctx, `SELECT weekday, start_min, end_min FROM barber_hours
 		WHERE barber_id = $1 ORDER BY weekday, start_min`, barberID)
@@ -251,8 +293,9 @@ func (r *CatalogRepository) CreateOverride(ctx context.Context, o *domain.DayOve
 		o.BarberID, o.Day, o.Kind, o.StartMin, o.EndMin, o.Note).Scan(&o.ID))
 }
 
-func (r *CatalogRepository) DeleteOverride(ctx context.Context, id uuid.UUID) error {
-	tag, err := r.db.Exec(ctx, `DELETE FROM schedule_overrides WHERE id = $1`, id)
+// DeleteOverride borra la excepción. Con scope solo borra las de ese barbero.
+func (r *CatalogRepository) DeleteOverride(ctx context.Context, id uuid.UUID, scope *uuid.UUID) error {
+	tag, err := r.db.Exec(ctx, `DELETE FROM schedule_overrides WHERE id = $1 AND ($2::uuid IS NULL OR barber_id = $2)`, id, scope)
 	if err != nil {
 		return mapErr(err)
 	}

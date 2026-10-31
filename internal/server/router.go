@@ -2,11 +2,13 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jcrlabs/barber-back/internal/config"
 	"github.com/jcrlabs/barber-back/internal/domain"
@@ -41,7 +43,10 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	notifier := notify.New(notify.Config{
 		NtfyURL: cfg.NtfyURL, NtfyToken: cfg.NtfyToken, TelegramToken: cfg.TelegramToken,
 		TelegramChat: cfg.TelegramChat, PublicURL: cfg.PublicURL, Location: cfg.ShopTimezone,
-	}, logger)
+		NtfyBase: cfg.NtfyBase, SMTP: notify.SMTPConfig(cfg.SMTP),
+	}, logger).WithRecipients(func(ctx context.Context, barberID uuid.UUID) (*domain.BarberNotify, error) {
+		return catalog.GetNotify(ctx, barberID)
+	})
 	bookingSvc := services.NewBookingService(catalog, appts, services.BookingRules{
 		Location: cfg.ShopTimezone, SlotStep: cfg.SlotStep, LeadTime: cfg.BookingLead,
 		WindowDays: cfg.BookingWindow, CancelWindow: cfg.CancelWindow, MaxActiveAppt: cfg.MaxActiveAppt,
@@ -53,8 +58,8 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 
 	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure())
 	bookingH := handlers.NewBookingHandler(bookingSvc, catalog, appts, users)
-	staffH := handlers.NewStaffHandler(bookingSvc, appts)
-	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone, notifier.Channels())
+	staffH := handlers.NewStaffHandler(bookingSvc, appts, catalog, notifier)
+	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone)
 	healthH := handlers.NewHealthHandler(db)
 
 	if cfg.IsProduction() {
@@ -113,10 +118,18 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	authed.POST("/appointments", mw.RateLimit(20, time.Hour, "too many bookings, try again later"), bookingH.Book)
 	authed.POST("/appointments/:id/cancel", bookingH.Cancel)
 
-	// ── Agenda (solo admins) ──
-	staff := authed.Group("/staff", mw.RequireRole(domain.RoleAdmin))
+	// ── Panel de barbero (barberos ven lo suyo; el admin, toda la barbería) ──
+	staff := authed.Group("/staff", mw.RequireRole(domain.RoleBarber, domain.RoleAdmin))
 	staff.GET("/agenda", staffH.Agenda)
 	staff.POST("/appointments/:id/status", staffH.SetStatus)
+	staff.GET("/notifications", staffH.Notifications)
+	staff.GET("/overrides", staffH.ListOverrides)
+	staff.POST("/overrides", staffH.CreateOverride)
+	staff.DELETE("/overrides/:id", staffH.DeleteOverride)
+	staff.GET("/me", staffH.Me)
+	staff.PUT("/me/hours", staffH.UpdateMyHours)
+	staff.PUT("/me/notify", staffH.UpdateMyNotify)
+	staff.POST("/me/notify/test", mw.RateLimit(5, 15*time.Minute, "too many test notifications"), staffH.TestMyNotify)
 
 	// ── Admin ──
 	admin := authed.Group("/admin", mw.RequireRole(domain.RoleAdmin))
@@ -130,10 +143,6 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	admin.PUT("/barbers/:id", adminH.UpdateBarber)
 	admin.DELETE("/barbers/:id", adminH.DeleteBarber)
 	admin.GET("/appointments", adminH.ListAppointments)
-	admin.GET("/notifications", adminH.Notifications)
-	admin.GET("/overrides", adminH.ListOverrides)
-	admin.POST("/overrides", adminH.CreateOverride)
-	admin.DELETE("/overrides/:id", adminH.DeleteOverride)
 	admin.GET("/users", adminH.ListUsers)
 	admin.PATCH("/users/:id/role", adminH.SetUserRole)
 

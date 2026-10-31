@@ -17,13 +17,11 @@ type AdminHandler struct {
 	appts   *repository.AppointmentRepository
 	users   *repository.UserRepository
 	loc     *time.Location
-	// channels son los canales de aviso externos configurados (ntfy, telegram).
-	channels []string
 }
 
 func NewAdminHandler(c *repository.CatalogRepository, a *repository.AppointmentRepository, u *repository.UserRepository,
-	loc *time.Location, channels []string) *AdminHandler {
-	return &AdminHandler{catalog: c, appts: a, users: u, loc: loc, channels: channels}
+	loc *time.Location) *AdminHandler {
+	return &AdminHandler{catalog: c, appts: a, users: u, loc: loc}
 }
 
 // ─── Services ────────────────────────────────────────────────────────────────
@@ -149,7 +147,26 @@ func (h *AdminHandler) barberFromRequest(c *gin.Context, id uuid.UUID) (*domain.
 	for _, hr := range req.Hours {
 		b.Hours = append(b.Hours, domain.WorkingHours(hr))
 	}
+	if req.UserID != nil && !h.promoteToBarber(c, *req.UserID) {
+		return nil, false
+	}
 	return b, true
+}
+
+// promoteToBarber da el rol de barbero a la cuenta enlazada (si era cliente) para que pueda entrar en su panel.
+func (h *AdminHandler) promoteToBarber(c *gin.Context, userID uuid.UUID) bool {
+	u, err := h.users.FindByID(c.Request.Context(), userID)
+	if err != nil {
+		fail(c, err)
+		return false
+	}
+	if u.Role == domain.RoleClient {
+		if err := h.users.SetRole(c.Request.Context(), u.ID, domain.RoleBarber); err != nil {
+			fail(c, err)
+			return false
+		}
+	}
+	return true
 }
 
 func (h *AdminHandler) ListBarbers(c *gin.Context) {
@@ -256,7 +273,7 @@ func (h *AdminHandler) ListUsers(c *gin.Context) {
 }
 
 type roleRequest struct {
-	Role domain.Role `json:"role" binding:"required,oneof=client admin"`
+	Role domain.Role `json:"role" binding:"required,oneof=client barber admin"`
 }
 
 func (h *AdminHandler) SetUserRole(c *gin.Context) {
@@ -297,99 +314,4 @@ func (h *AdminHandler) Stats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, s)
-}
-
-// ─── Avisos de reservas nuevas ───────────────────────────────────────────────
-
-// Notifications devuelve las citas reservadas después de `since` (RFC 3339), como mucho de los
-// últimos 7 días. El panel lo consulta periódicamente para avisar al admin de reservas nuevas.
-func (h *AdminHandler) Notifications(c *gin.Context) {
-	now := time.Now()
-	since := now.Add(-24 * time.Hour)
-	if v := c.Query("since"); v != "" {
-		t, err := time.Parse(time.RFC3339Nano, v)
-		if err != nil {
-			badRequest(c, "invalid since (RFC 3339)")
-			return
-		}
-		since = t
-	}
-	if floor := now.Add(-7 * 24 * time.Hour); since.Before(floor) {
-		since = floor
-	}
-	list, _, err := h.appts.List(c.Request.Context(), repository.AppointmentFilter{
-		Status: domain.StatusConfirmed, CreatedAfter: &since, NewestFirst: true, Limit: 50,
-	})
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"items": list, "server_time": now.UTC(), "channels": h.channels})
-}
-
-// ─── Excepciones de horario ──────────────────────────────────────────────────
-
-type overrideRequest struct {
-	BarberID *uuid.UUID          `json:"barber_id"`
-	Day      string              `json:"day" binding:"required,datetime=2006-01-02"`
-	Kind     domain.OverrideKind `json:"kind" binding:"required,oneof=closed open block"`
-	StartMin *int                `json:"start_min" binding:"omitempty,min=0,max=1439"`
-	EndMin   *int                `json:"end_min" binding:"omitempty,min=1,max=1440"`
-	Note     string              `json:"note" binding:"max=200"`
-}
-
-func (h *AdminHandler) ListOverrides(c *gin.Context) {
-	today := time.Now().In(h.loc)
-	from := c.DefaultQuery("from", today.Format("2006-01-02"))
-	to := c.DefaultQuery("to", today.AddDate(0, 0, 90).Format("2006-01-02"))
-	f, err1 := time.Parse("2006-01-02", from)
-	t, err2 := time.Parse("2006-01-02", to)
-	if err1 != nil || err2 != nil || t.Before(f) || t.Sub(f) > 400*24*time.Hour {
-		badRequest(c, "invalid from/to (YYYY-MM-DD, max 400 days)")
-		return
-	}
-	list, err := h.catalog.ListOverrides(c.Request.Context(), from, to)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, list)
-}
-
-func (h *AdminHandler) CreateOverride(c *gin.Context) {
-	var req overrideRequest
-	if !bind(c, &req) {
-		return
-	}
-	if req.Kind == domain.OverrideClosed {
-		req.StartMin, req.EndMin = nil, nil
-	} else if req.StartMin == nil || req.EndMin == nil || *req.StartMin >= *req.EndMin {
-		badRequest(c, "start_min and end_min are required and start must be before end")
-		return
-	}
-	if req.BarberID != nil {
-		if _, err := h.catalog.GetBarber(c.Request.Context(), *req.BarberID); err != nil {
-			fail(c, err)
-			return
-		}
-	}
-	o := &domain.DayOverride{BarberID: req.BarberID, Day: req.Day, Kind: req.Kind,
-		StartMin: req.StartMin, EndMin: req.EndMin, Note: req.Note}
-	if err := h.catalog.CreateOverride(c.Request.Context(), o); err != nil {
-		fail(c, err)
-		return
-	}
-	c.JSON(http.StatusCreated, o)
-}
-
-func (h *AdminHandler) DeleteOverride(c *gin.Context) {
-	id, ok := paramUUID(c, "id")
-	if !ok {
-		return
-	}
-	if err := h.catalog.DeleteOverride(c.Request.Context(), id); err != nil {
-		fail(c, err)
-		return
-	}
-	c.Status(http.StatusNoContent)
 }

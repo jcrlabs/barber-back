@@ -57,6 +57,14 @@ type Config struct {
 	NtfyToken     string
 	TelegramToken string
 	TelegramChat  string
+	// NtfyBase es el servidor ntfy de los topics personales de cada barbero.
+	NtfyBase string
+	SMTP     SMTPConfig
+}
+
+// SMTPConfig habilita los avisos por email a los barberos (p.ej. Gmail con contraseña de aplicación).
+type SMTPConfig struct {
+	Host, Port, User, Password, From string
 }
 
 func (c *Config) IsProduction() bool { return c.Env == "production" }
@@ -90,6 +98,11 @@ func Load() (*Config, error) {
 		NtfyToken:              os.Getenv("NTFY_TOKEN"),
 		TelegramToken:          os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChat:           os.Getenv("TELEGRAM_CHAT_ID"),
+		NtfyBase:               strings.TrimRight(getEnv("NTFY_BASE_URL", "https://ntfy.sh"), "/"),
+		SMTP: SMTPConfig{
+			Host: strings.TrimSpace(os.Getenv("SMTP_HOST")), Port: getEnv("SMTP_PORT", "587"),
+			User: os.Getenv("SMTP_USER"), Password: os.Getenv("SMTP_PASSWORD"), From: os.Getenv("SMTP_FROM"),
+		},
 	}
 
 	for _, e := range splitList(os.Getenv("ADMIN_EMAILS")) {
@@ -120,6 +133,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.NtfyURL != "" && !strings.HasPrefix(cfg.NtfyURL, "https://") && !strings.HasPrefix(cfg.NtfyURL, "http://") {
 		return nil, errors.New("NTFY_URL must be an http(s) URL")
+	}
+	if !strings.HasPrefix(cfg.NtfyBase, "https://") && !strings.HasPrefix(cfg.NtfyBase, "http://") {
+		return nil, errors.New("NTFY_BASE_URL must be an http(s) URL")
+	}
+	if (cfg.SMTP.Host == "") != (cfg.SMTP.From == "") {
+		return nil, errors.New("SMTP_HOST and SMTP_FROM must be set together")
 	}
 	if cfg.SlotStep <= 0 || cfg.BookingWindow <= 0 {
 		return nil, errors.New("SLOT_STEP_MIN and BOOKING_WINDOW_DAYS must be positive")

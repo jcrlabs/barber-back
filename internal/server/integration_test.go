@@ -283,15 +283,15 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	}
 
 	// Avisos: la única reserva ya está cancelada, así que no debe aparecer como nueva.
-	if code, body, _ := winner.do("GET", "/api/v1/admin/notifications", nil); code != 200 || len(body["items"].([]any)) != 0 {
+	if code, body, _ := winner.do("GET", "/api/v1/staff/notifications", nil); code != 200 || len(body["items"].([]any)) != 0 {
 		t.Fatalf("notifications: %d %v", code, body)
 	}
 
 	// Excepciones: cerrar la barbería ese día deja el día sin huecos y no se puede reservar.
-	if code, _, _ := winner.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "open"}); code != 400 {
+	if code, _, _ := winner.do("POST", "/api/v1/staff/overrides", map[string]any{"day": date, "kind": "open"}); code != 400 {
 		t.Fatalf("open override without hours: %d", code)
 	}
-	code, ov, _ := winner.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "closed", "note": "Festivo"})
+	code, ov, _ := winner.do("POST", "/api/v1/staff/overrides", map[string]any{"day": date, "kind": "closed", "note": "Festivo"})
 	if code != 201 {
 		t.Fatalf("create override: %d %v", code, ov)
 	}
@@ -302,10 +302,10 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	if code, _, _ := loser.do("POST", "/api/v1/appointments", book); code != 422 {
 		t.Fatalf("booking on closed day: %d", code)
 	}
-	if code, _, list := winner.do("GET", "/api/v1/admin/overrides", nil); code != 200 || len(list) != 1 {
+	if code, _, list := winner.do("GET", "/api/v1/staff/overrides", nil); code != 200 || len(list) != 1 {
 		t.Fatalf("list overrides: %d %v", code, list)
 	}
-	if code, _, _ := winner.do("DELETE", "/api/v1/admin/overrides/"+ov["id"].(string), nil); code != 204 {
+	if code, _, _ := winner.do("DELETE", "/api/v1/staff/overrides/"+ov["id"].(string), nil); code != 204 {
 		t.Fatalf("delete override: %d", code)
 	}
 	_, avail, _ = anon.do("GET", "/api/v1/availability?service_id="+serviceID+"&date="+date, nil)
@@ -317,7 +317,7 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	if code, _, _ := loser.do("GET", "/api/v1/staff/agenda", nil); code != 403 {
 		t.Fatalf("client reached agenda: %d", code)
 	}
-	if code, _, _ := loser.do("POST", "/api/v1/admin/overrides", map[string]any{"day": date, "kind": "closed"}); code != 403 {
+	if code, _, _ := loser.do("POST", "/api/v1/staff/overrides", map[string]any{"day": date, "kind": "closed"}); code != 403 {
 		t.Fatalf("client created override: %d", code)
 	}
 
@@ -335,6 +335,64 @@ func TestEndToEndBookingFlow(t *testing.T) {
 	if code, _, _ := boss.do("GET", "/api/v1/admin/stats", nil); code != 200 {
 		t.Fatalf("bootstrap admin stats: %d", code)
 	}
+	// Rol barbero: el admin enlaza la cuenta del cliente al barbero y pasa a ver solo lo suyo.
+	_, me, _ := loser.do("GET", "/api/v1/auth/me", nil)
+	loserID := me["id"].(string)
+	if code, body, _ := boss.do("PUT", "/api/v1/admin/barbers/"+barberID, map[string]any{
+		"name": "Edgar", "active": true, "user_id": loserID,
+		"hours": []map[string]any{{"weekday": 2, "start_min": 600, "end_min": 840}},
+	}); code != 200 {
+		t.Fatalf("link barber: %d %v", code, body)
+	}
+	loserEmail := map[*client]string{ana: "ana@test.es", bob: "bob@test.es"}[loser]
+	if code, body, _ := loser.do("POST", "/api/v1/auth/login", map[string]any{"email": loserEmail, "password": "navaja2026"}); code != 200 || body["user"].(map[string]any)["role"] != "barber" {
+		t.Fatalf("barber login: %d %v", code, body)
+	}
+	if code, _, _ := loser.do("GET", "/api/v1/admin/stats", nil); code != 403 {
+		t.Fatalf("barber reached admin: %d", code)
+	}
+	code, mine2, _ := loser.do("GET", "/api/v1/staff/me", nil)
+	if code != 200 || mine2["barber"].(map[string]any)["id"] != barberID {
+		t.Fatalf("staff me: %d %v", code, mine2)
+	}
+	if topic := mine2["notify"].(map[string]any)["ntfy_topic"].(string); !strings.HasPrefix(topic, "edgarbarber-") {
+		t.Fatalf("ntfy topic: %q", topic)
+	}
+	if code, body, _ := loser.do("PUT", "/api/v1/staff/me/hours", map[string]any{"hours": []map[string]any{
+		{"weekday": 3, "start_min": 600, "end_min": 720}, {"weekday": 3, "start_min": 700, "end_min": 800},
+	}}); code != 400 {
+		t.Fatalf("overlapping hours accepted: %d %v", code, body)
+	}
+	if code, body, _ := loser.do("PUT", "/api/v1/staff/me/hours", map[string]any{"hours": []map[string]any{
+		{"weekday": 3, "start_min": 600, "end_min": 720},
+	}}); code != 200 || len(body["hours"].([]any)) != 1 {
+		t.Fatalf("update my hours: %d %v", code, body)
+	}
+	if code, body, _ := loser.do("PUT", "/api/v1/staff/me/notify", map[string]any{"email": "edgar@test.es", "whatsapp_phone": "600112233"}); code != 200 || body["email"] != "edgar@test.es" {
+		t.Fatalf("update notify: %d %v", code, body)
+	}
+	if code, _, _ := loser.do("PUT", "/api/v1/staff/me/notify", map[string]any{"email": "no-es-email"}); code != 400 {
+		t.Fatalf("invalid notify email: %d", code)
+	}
+	// Las excepciones del barbero quedan ligadas a él aunque pida otra cosa, y no puede borrar las de la barbería.
+	code, own, _ := loser.do("POST", "/api/v1/staff/overrides", map[string]any{"day": date, "kind": "closed", "barber_id": nil})
+	if code != 201 || own["barber_id"] != barberID {
+		t.Fatalf("barber override: %d %v", code, own)
+	}
+	_, shop, _ := boss.do("POST", "/api/v1/staff/overrides", map[string]any{"day": date, "kind": "block", "start_min": 600, "end_min": 660})
+	if code, _, _ := loser.do("DELETE", "/api/v1/staff/overrides/"+shop["id"].(string), nil); code != 404 {
+		t.Fatalf("barber deleted shop override: %d", code)
+	}
+	if code, _, _ := loser.do("DELETE", "/api/v1/staff/overrides/"+own["id"].(string), nil); code != 204 {
+		t.Fatalf("barber delete own override: %d", code)
+	}
+	if code, _, _ := loser.do("GET", "/api/v1/staff/agenda", nil); code != 200 {
+		t.Fatalf("barber agenda: %d", code)
+	}
+	if code, _, _ := boss.do("GET", "/api/v1/staff/me", nil); code != 403 {
+		t.Fatalf("unlinked admin staff/me: %d", code)
+	}
+
 	// El registro exige teléfono.
 	if code, _, _ := (&client{t: t, h: h}).do("POST", "/api/v1/auth/register", map[string]any{"name": "Sin Tel", "email": "sintel@test.es", "password": "navaja2026"}); code != 400 {
 		t.Fatalf("register without phone: %d", code)

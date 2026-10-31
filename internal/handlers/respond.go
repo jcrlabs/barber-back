@@ -25,6 +25,7 @@ var errorMap = map[error]apiError{
 	domain.ErrInvalidCredentials: {http.StatusUnauthorized, "invalid_credentials"},
 	domain.ErrInvalidToken:       {http.StatusUnauthorized, "invalid_token"},
 	domain.ErrForbidden:          {http.StatusForbidden, "forbidden"},
+	domain.ErrNotLinked:          {http.StatusForbidden, "not_linked"},
 	domain.ErrSlotTaken:          {http.StatusConflict, "slot_taken"},
 	domain.ErrSlotInvalid:        {http.StatusUnprocessableEntity, "slot_invalid"},
 	domain.ErrTooManyActive:      {http.StatusUnprocessableEntity, "too_many_active"},

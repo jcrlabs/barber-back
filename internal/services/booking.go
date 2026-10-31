@@ -22,11 +22,13 @@ type CatalogStore interface {
 // Notifier avisa a la barbería de las reservas nuevas (Telegram, ntfy...). Nunca bloquea la reserva.
 type Notifier interface {
 	NewBooking(a *domain.Appointment)
+	Cancelled(a *domain.Appointment)
 }
 
 type noopNotifier struct{}
 
 func (noopNotifier) NewBooking(*domain.Appointment) {}
+func (noopNotifier) Cancelled(*domain.Appointment)  {}
 
 type AppointmentStore interface {
 	Create(ctx context.Context, a *domain.Appointment) error
@@ -415,17 +417,21 @@ func (s *BookingService) CancelByClient(ctx context.Context, clientID, apptID uu
 		return nil, err
 	}
 	a.Status = domain.StatusCancelled
+	s.notify.Cancelled(a)
 	return a, nil
 }
 
-// SetStatusByStaff cambia el estado de una cita confirmada (solo admins).
-func (s *BookingService) SetStatusByStaff(ctx context.Context, apptID uuid.UUID, status domain.AppointmentStatus) (*domain.Appointment, error) {
+// SetStatusByStaff cambia el estado de una cita confirmada. Con scope (barbero) solo sobre sus propias citas.
+func (s *BookingService) SetStatusByStaff(ctx context.Context, apptID uuid.UUID, status domain.AppointmentStatus, scope *uuid.UUID) (*domain.Appointment, error) {
 	if status == domain.StatusConfirmed || !status.Valid() {
 		return nil, domain.ErrInvalidState
 	}
 	a, err := s.appts.Get(ctx, apptID)
 	if err != nil {
 		return nil, err
+	}
+	if scope != nil && a.BarberID != *scope {
+		return nil, domain.ErrNotFound
 	}
 	if a.Status != domain.StatusConfirmed {
 		return nil, domain.ErrInvalidState

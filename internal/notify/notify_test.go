@@ -1,6 +1,9 @@
 package notify
 
 import (
+	"context"
+	"net/mail"
+
 	"io"
 	"log/slog"
 	"net/http"
@@ -8,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/jcrlabs/barber-back/internal/domain"
 )
@@ -55,5 +60,51 @@ func TestNtfySendsCallAction(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("no notification sent")
+	}
+}
+
+func TestBarberChannels(t *testing.T) {
+	hits := make(chan *http.Request, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits <- r }))
+	defer srv.Close()
+
+	loc, _ := time.LoadLocation("Europe/Madrid")
+	n := New(Config{NtfyBase: srv.URL, CallMeBotURL: srv.URL + "/wa", PublicURL: "https://x.test", Location: loc},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	rc := &domain.BarberNotify{NtfyTopic: "edgarbarber-abc", WhatsAppPhone: "600 112 233", CallMeBotKey: "123456", Email: "e@x.test"}
+	n.WithRecipients(func(context.Context, uuid.UUID) (*domain.BarberNotify, error) { return rc, nil })
+
+	res := n.Test(context.Background(), "Edgar", rc)
+	if res["ntfy"] != "ok" || res["whatsapp"] != "ok" || res["email"] != "off" {
+		t.Fatalf("results: %v", res)
+	}
+	seen := map[string]bool{}
+	for range 2 {
+		r := <-hits
+		seen[r.URL.Path] = true
+		if r.URL.Path == "/wa" && (r.URL.Query().Get("phone") != "+34600112233" || r.URL.Query().Get("apikey") != "123456") {
+			t.Fatalf("callmebot query: %v", r.URL.RawQuery)
+		}
+	}
+	if !seen["/edgarbarber-abc"] || !seen["/wa"] {
+		t.Fatalf("channels hit: %v", seen)
+	}
+
+	n.Cancelled(&domain.Appointment{ClientName: "Ana", ServiceName: "Corte", BarberName: "Edgar", StartsAt: time.Now()})
+	for range 2 {
+		select {
+		case <-hits:
+		case <-time.After(3 * time.Second):
+			t.Fatal("cancellation not sent to barber")
+		}
+	}
+}
+
+func TestEmailHeadersSanitized(t *testing.T) {
+	from := &mail.Address{Address: "a@x.test"}
+	to := &mail.Address{Address: "b@x.test"}
+	msg := buildMessage(from, to, "Hola\r\nBcc: evil@x.test", "cuerpo")
+	if strings.Contains(msg, "\r\nBcc:") {
+		t.Fatalf("header injection: %q", msg)
 	}
 }
