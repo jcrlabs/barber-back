@@ -1,6 +1,6 @@
 apiVersion: v2
 name: barber-back
-description: Navaja — API de reservas de barbería (Go + PostgreSQL)
+description: Edgar Barber — API de reservas de barbería (Go + PostgreSQL)
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

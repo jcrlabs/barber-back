@@ -4,8 +4,8 @@ image:
   tag: v0.1.0
 
 config:
-  publicUrl: https://barber.jcrlabs.net
-  corsAllowedOrigins: "https://barber.jcrlabs.net"
+  publicUrl: https://edgarbarber.jcrlabs.net
+  corsAllowedOrigins: "https://edgarbarber.jcrlabs.net"
 
 postgres:
   storage: 5Gi

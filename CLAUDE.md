@@ -1,6 +1,6 @@
 # CLAUDE.md — barber-back
 
-API de reservas de la barbería Navaja (Go + Gin + pgx + PostgreSQL).
+API de reservas de la barbería Edgar Barber (Go + Gin + pgx + PostgreSQL).
 
 ## CI local
 

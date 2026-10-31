@@ -38,7 +38,7 @@ func SeedDemo(ctx context.Context, catalog *repository.CatalogRepository) error 
 	}
 	split := append(weekdays(10*60, 14*60, 2, 3, 4, 5, 6), weekdays(16*60, 20*60+30, 2, 3, 4, 5)...)
 	barbers := []domain.Barber{
-		{Name: "Marco Ferri", Title: "Master barber", Bio: "Quince años con la navaja. Obsesionado con los fades limpios.", Hours: split},
+		{Name: "Edgar", Title: "Fundador · Master barber", Bio: "Quince años con la navaja. Obsesionado con los fades limpios y el detalle.", Hours: split},
 		{Name: "Lucía Ortega", Title: "Barba & afeitado", Bio: "Especialista en barbas y afeitado tradicional con toalla caliente.", Hours: weekdays(9*60+30, 17*60+30, 1, 2, 3, 4, 5)},
 		{Name: "Dani Ruiz", Title: "Cortes modernos", Bio: "Texturas, crops y diseños a máquina.", Hours: weekdays(12*60, 20*60, 2, 3, 4, 5, 6)},
 	}

@@ -1,6 +1,6 @@
-# barber-back — API de Navaja
+# barber-back — API de Edgar Barber
 
-API de reservas para la barbería **Navaja**: registro con email o Google/GitHub, catálogo de servicios y barberos, motor de disponibilidad y gestión de citas para clientes, barberos y administración.
+API de reservas para la barbería **Edgar Barber**: registro con email o Google/GitHub, catálogo de servicios y barberos, motor de disponibilidad y gestión de citas para clientes, barberos y administración.
 
 **Stack:** Go 1.26 · Gin · pgx/v5 · PostgreSQL 17 · JWT RS256 · Helm · ArgoCD
 
@@ -8,7 +8,7 @@ API de reservas para la barbería **Navaja**: registro con email o Google/GitHub
 
 ```mermaid
 flowchart LR
-  U[Navegador] -->|HTTPS barber.jcrlabs.net| IN[ingress-nginx]
+  U[Navegador] -->|HTTPS edgarbarber.jcrlabs.net| IN[ingress-nginx]
   IN --> FE[barber-front · nginx]
   FE -->|/api/*| BE[barber-back · Gin]
   BE --> PG[(PostgreSQL)]
@@ -68,8 +68,8 @@ Con `SEED_DEMO_DATA=true` se crea una carta y un equipo de ejemplo si el catálo
 
 ### OAuth
 
-- **Google** → Google Cloud Console › Credenciales › ID de cliente OAuth (aplicación web). URI de redirección: `https://barber.jcrlabs.net/api/v1/auth/oauth/google/callback`.
-- **GitHub** → Settings › Developer settings › OAuth Apps. Callback: `https://barber.jcrlabs.net/api/v1/auth/oauth/github/callback`.
+- **Google** → Google Cloud Console › Credenciales › ID de cliente OAuth (aplicación web). URI de redirección: `https://edgarbarber.jcrlabs.net/api/v1/auth/oauth/google/callback`.
+- **GitHub** → Settings › Developer settings › OAuth Apps. Callback: `https://edgarbarber.jcrlabs.net/api/v1/auth/oauth/github/callback`.
 
 Si un proveedor no tiene credenciales, simplemente no se ofrece en el login.
 

@@ -6,8 +6,8 @@ image:
 
 config:
   env: test
-  publicUrl: https://barber-test.jcrlabs.net
-  corsAllowedOrigins: "https://barber-test.jcrlabs.net"
+  publicUrl: https://edgarbarber-test.jcrlabs.net
+  corsAllowedOrigins: "https://edgarbarber-test.jcrlabs.net"
 
 resources:
   requests:
