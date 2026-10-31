@@ -282,8 +282,8 @@ func TestEndToEndBookingFlow(t *testing.T) {
 		t.Fatalf("admin appointments: %d %v", code, body)
 	}
 
-	// Avisos: la reserva aparece como nueva para el admin.
-	if code, body, _ := winner.do("GET", "/api/v1/admin/notifications", nil); code != 200 || len(body["items"].([]any)) != 1 {
+	// Avisos: la única reserva ya está cancelada, así que no debe aparecer como nueva.
+	if code, body, _ := winner.do("GET", "/api/v1/admin/notifications", nil); code != 200 || len(body["items"].([]any)) != 0 {
 		t.Fatalf("notifications: %d %v", code, body)
 	}
 
