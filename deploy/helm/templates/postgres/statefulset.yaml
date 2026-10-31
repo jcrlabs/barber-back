@@ -63,10 +63,14 @@ spec:
           resources:
             {{- toYaml .Values.postgres.resources | nindent 12 }}
   volumeClaimTemplates:
-    - metadata:
+    # Declaramos los valores por defecto que añade Kubernetes para que ArgoCD no marque OutOfSync.
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
       spec:
         accessModes: [ReadWriteOnce]
+        volumeMode: Filesystem
         resources:
           requests:
             storage: {{ .Values.postgres.storage }}
