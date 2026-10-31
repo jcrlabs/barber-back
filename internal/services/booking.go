@@ -75,9 +75,9 @@ type Slot struct {
 }
 
 type DaySummary struct {
-	Date  string `json:"date"`
-	Free  int    `json:"free"`
-	Open  bool   `json:"open"`
+	Date string `json:"date"`
+	Free int    `json:"free"`
+	Open bool   `json:"open"`
 	// Total son los huecos que tendría el día sin ninguna cita (según horario, excepciones y antelación).
 	Total int `json:"total"`
 }
