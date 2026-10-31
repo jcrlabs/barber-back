@@ -21,6 +21,15 @@ func TestDialablePhone(t *testing.T) {
 	}
 }
 
+func TestWhatsAppNumber(t *testing.T) {
+	cases := map[string]string{"600 11 22 33": "34600112233", "+44 7700 900123": "447700900123", "0034600112233": "0034600112233"}
+	for in, want := range cases {
+		if got := WhatsAppNumber(in); got != want {
+			t.Errorf("%q: got %q want %q", in, got, want)
+		}
+	}
+}
+
 func TestNtfySendsCallAction(t *testing.T) {
 	got := make(chan *http.Request, 1)
 	var body string

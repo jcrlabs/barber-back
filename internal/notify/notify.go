@@ -58,6 +58,18 @@ func DialablePhone(p string) string {
 	return b.String()
 }
 
+// WhatsAppNumber devuelve el número para wa.me: sin +, y con prefijo 34 si es un número nacional de 9 cifras.
+func WhatsAppNumber(p string) string {
+	d := DialablePhone(p)
+	if strings.HasPrefix(d, "+") {
+		return d[1:]
+	}
+	if len(d) == 9 {
+		return "34" + d
+	}
+	return d
+}
+
 func (n *Notifier) message(a *domain.Appointment) (title, body string) {
 	start := a.StartsAt.In(n.cfg.Location)
 	title = fmt.Sprintf("Nueva cita · %s %s", start.Format("02/01"), start.Format("15:04"))
@@ -103,7 +115,7 @@ func (n *Notifier) ntfy(ctx context.Context, title, body string, a *domain.Appoi
 	req.Header.Set("Click", n.cfg.PublicURL+"/agenda")
 	if tel := DialablePhone(a.ClientPhone); tel != "" {
 		actions := "view, Llamar, tel:" + tel
-		if wa := strings.TrimPrefix(tel, "+"); wa != "" {
+		if wa := WhatsAppNumber(a.ClientPhone); wa != "" {
 			actions += "; view, WhatsApp, https://wa.me/" + wa
 		}
 		req.Header.Set("Actions", actions)
@@ -117,8 +129,8 @@ func (n *Notifier) ntfy(ctx context.Context, title, body string, a *domain.Appoi
 func (n *Notifier) telegram(ctx context.Context, title, body string, a *domain.Appointment) error {
 	payload := map[string]any{"chat_id": n.cfg.TelegramChat, "text": "✂️ " + title + "\n\n" + body}
 	buttons := []map[string]string{{"text": "Abrir agenda", "url": n.cfg.PublicURL + "/agenda"}}
-	if tel := strings.TrimPrefix(DialablePhone(a.ClientPhone), "+"); tel != "" {
-		buttons = append(buttons, map[string]string{"text": "WhatsApp", "url": "https://wa.me/" + tel})
+	if wa := WhatsAppNumber(a.ClientPhone); wa != "" {
+		buttons = append(buttons, map[string]string{"text": "WhatsApp", "url": "https://wa.me/" + wa})
 	}
 	payload["reply_markup"] = map[string]any{"inline_keyboard": [][]map[string]string{buttons}}
 	raw, _ := json.Marshal(payload)
