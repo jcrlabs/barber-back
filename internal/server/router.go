@@ -56,7 +56,18 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 		services.OAuthCredentials{ClientID: cfg.GitHub.ClientID, ClientSecret: cfg.GitHub.ClientSecret},
 	)
 
-	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure())
+	// Los límites de autenticación se guardan en Postgres para que valgan igual en todas las réplicas.
+	limits := repository.NewRateLimitRepository(db)
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for range t.C {
+			if err := limits.Purge(context.Background()); err != nil {
+				logger.Warn("rate limit purge failed", "err", err)
+			}
+		}
+	}()
+	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure()).WithAccountStore(limits)
 	bookingH := handlers.NewBookingHandler(bookingSvc, catalog, appts, users)
 	staffH := handlers.NewStaffHandler(bookingSvc, appts, catalog, notifier)
 	adminH := handlers.NewAdminHandler(catalog, appts, users, cfg.ShopTimezone)
@@ -95,12 +106,12 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	// ── Auth (públicas, con límites estrictos) ──
 	authG := api.Group("/auth")
 	csrf := mw.CSRFGuard(cfg.AllowedOrigins)
-	authG.POST("/register", mw.RateLimit(3, time.Hour, "too many registrations, try again later"), authH.Register)
-	authG.POST("/login", mw.RateLimit(10, 15*time.Minute, "too many login attempts, try again later"), authH.Login)
-	authG.POST("/refresh", mw.RateLimit(60, 15*time.Minute, "too many refresh attempts"), csrf, authH.Refresh)
+	authG.POST("/register", mw.SharedRateLimit(limits, "register", 3, time.Hour, "too many registrations, try again later"), authH.Register)
+	authG.POST("/login", mw.SharedRateLimit(limits, "login", 10, 15*time.Minute, "too many login attempts, try again later"), authH.Login)
+	authG.POST("/refresh", mw.SharedRateLimit(limits, "refresh", 60, 15*time.Minute, "too many refresh attempts"), csrf, authH.Refresh)
 	authG.POST("/logout", csrf, authH.Logout)
 	authG.GET("/providers", authH.Providers)
-	oauthLimit := mw.RateLimit(20, 15*time.Minute, "too many social login attempts")
+	oauthLimit := mw.SharedRateLimit(limits, "oauth", 40, 15*time.Minute, "too many social login attempts")
 	authG.GET("/oauth/:provider/start", oauthLimit, authH.OAuthStart)
 	authG.GET("/oauth/:provider/callback", oauthLimit, authH.OAuthCallback)
 
@@ -117,7 +128,7 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 	authed.Use(mw.AuthRequired(authSvc), mw.RateLimitUser(300, time.Minute, "too many requests"))
 	authed.GET("/auth/me", authH.Me)
 	authed.PATCH("/auth/me", mw.RateLimitUser(20, time.Hour, "too many profile changes"), authH.UpdateMe)
-	authed.POST("/auth/me/password", mw.RateLimit(5, 15*time.Minute, "too many password changes"),
+	authed.POST("/auth/me/password", mw.SharedRateLimit(limits, "password", 5, 15*time.Minute, "too many password changes"),
 		mw.RateLimitUser(5, 15*time.Minute, "too many password changes"), authH.ChangePassword)
 	authed.POST("/auth/logout-all", mw.RateLimitUser(10, time.Hour, "too many requests"), authH.LogoutAll)
 

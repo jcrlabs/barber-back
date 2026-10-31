@@ -47,6 +47,12 @@ func NewAuthHandler(auth *services.AuthService, users *repository.UserRepository
 		accountGuard: middleware.NewRateLimiter(accountMaxFailures, accountLockWindow)}
 }
 
+// WithAccountStore comparte el bloqueo por cuenta entre réplicas (si no, cada réplica contaría sus propios fallos).
+func (h *AuthHandler) WithAccountStore(store middleware.HitStore) *AuthHandler {
+	h.accountGuard = middleware.NewSharedLimiter(store, "login-account", accountMaxFailures, accountLockWindow)
+	return h
+}
+
 type sessionResponse struct {
 	AccessToken string       `json:"access_token"`
 	ExpiresAt   time.Time    `json:"expires_at"`

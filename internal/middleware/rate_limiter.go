@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -63,13 +65,34 @@ func (sw *slidingWindow) idle(now time.Time, window time.Duration) bool {
 	return len(sw.attempts) == 0 || !sw.attempts[len(sw.attempts)-1].After(now.Add(-window))
 }
 
-// RateLimiter limita peticiones por IP con ventana deslizante.
+// HitStore es un almacén de intentos compartido entre réplicas (Postgres).
+type HitStore interface {
+	Hit(ctx context.Context, bucket, key string, maxHits int, window time.Duration) (bool, time.Duration, error)
+	Blocked(ctx context.Context, bucket, key string, maxHits int, window time.Duration) (bool, time.Duration, error)
+	Reset(ctx context.Context, bucket, key string) error
+}
+
+// RateLimiter limita peticiones con ventana deslizante. En memoria por defecto; con store,
+// el cupo es común a todas las réplicas (si el store falla, seguimos con la memoria local).
 type RateLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*slidingWindow
 	maxHits int
 	window  time.Duration
 	now     func() time.Time
+	store   HitStore
+	bucket  string
+}
+
+// NewSharedLimiter crea un limitador respaldado por un store compartido.
+func NewSharedLimiter(store HitStore, bucket string, maxHits int, window time.Duration) *RateLimiter {
+	l := NewRateLimiter(maxHits, window)
+	l.store, l.bucket = store, bucket
+	return l
+}
+
+func storeCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 2*time.Second)
 }
 
 func NewRateLimiter(maxHits int, window time.Duration) *RateLimiter {
@@ -107,16 +130,37 @@ func (l *RateLimiter) entry(key string) *slidingWindow {
 }
 
 func (l *RateLimiter) Allow(key string) (bool, time.Duration) {
+	if l.store != nil {
+		ctx, cancel := storeCtx()
+		defer cancel()
+		ok, retry, err := l.store.Hit(ctx, l.bucket, key, l.maxHits, l.window)
+		if err == nil {
+			return ok, retry
+		}
+		slog.Warn("shared rate limit unavailable, using local memory", "bucket", l.bucket, "err", err)
+	}
 	return l.entry(key).allow(l.now(), l.maxHits, l.window)
 }
 
 // Blocked consulta si la clave está bloqueada sin consumir cupo.
 func (l *RateLimiter) Blocked(key string) (bool, time.Duration) {
+	if l.store != nil {
+		ctx, cancel := storeCtx()
+		defer cancel()
+		if b, retry, err := l.store.Blocked(ctx, l.bucket, key, l.maxHits, l.window); err == nil {
+			return b, retry
+		}
+	}
 	return l.entry(key).blocked(l.now(), l.maxHits, l.window)
 }
 
 // Reset olvida los intentos de la clave (p.ej. tras un login correcto).
 func (l *RateLimiter) Reset(key string) {
+	if l.store != nil {
+		ctx, cancel := storeCtx()
+		defer cancel()
+		_ = l.store.Reset(ctx, l.bucket, key)
+	}
 	l.mu.Lock()
 	delete(l.entries, key)
 	l.mu.Unlock()
@@ -152,6 +196,11 @@ func RateLimitUser(maxHits int, window time.Duration, message string) gin.Handle
 		}
 		l.limit(c, key, message)
 	}
+}
+
+// SharedRateLimit limita por IP con un cupo común a todas las réplicas.
+func SharedRateLimit(store HitStore, bucket string, maxHits int, window time.Duration, message string) gin.HandlerFunc {
+	return NewSharedLimiter(store, bucket, maxHits, window).Middleware(message)
 }
 
 // RateLimit es un atajo para crear un limitador y su middleware.

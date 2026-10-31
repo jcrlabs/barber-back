@@ -422,3 +422,33 @@ func TestEndToEndBookingFlow(t *testing.T) {
 		t.Fatalf("register without phone: %d", code)
 	}
 }
+
+// Con dos réplicas detrás del balanceador, el bloqueo por cuenta y el límite de login
+// se comparten vía Postgres: alternar de réplica no da intentos extra.
+func TestLoginLimitsSharedAcrossReplicas(t *testing.T) {
+	h1, db := setup(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	app2, err := New(cfg, db, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicas := []*client{{t: t, h: h1, ip: "198.51.100.7"}, {t: t, h: app2.Router, ip: "198.51.100.8"}}
+	attempt := func(i int, email string) int {
+		code, _, _ := replicas[i%2].do("POST", "/api/v1/auth/login", map[string]any{"email": email, "password": "mal"})
+		return code
+	}
+	for i := range 8 {
+		if code := attempt(i, "victima@test.es"); code != 401 {
+			t.Fatalf("attempt %d: %d", i+1, code)
+		}
+	}
+	if code := attempt(8, "victima@test.es"); code != 429 {
+		t.Fatalf("account not locked after 8 failures across replicas: %d", code)
+	}
+	if code := attempt(9, "otra@test.es"); code != 401 {
+		t.Fatalf("lock leaked to another account: %d", code)
+	}
+}
