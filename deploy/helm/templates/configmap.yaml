@@ -21,4 +21,5 @@ data:
   BOOKING_WINDOW_DAYS: {{ .Values.config.bookingWindowDays | quote }}
   CANCEL_WINDOW_MIN: {{ .Values.config.cancelWindowMin | quote }}
   MAX_ACTIVE_APPOINTMENTS: {{ .Values.config.maxActiveAppointments | quote }}
+  REMINDER_LEAD_MIN: {{ .Values.config.reminderLeadMin | quote }}
   SEED_DEMO_DATA: {{ .Values.config.seedDemoData | quote }}

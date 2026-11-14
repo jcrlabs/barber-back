@@ -53,6 +53,8 @@ type Config struct {
 	CancelWindow  time.Duration
 	MaxActiveAppt int
 	SeedDemoData  bool
+	// ReminderLead es la antelación del email de recordatorio al cliente; 0 lo desactiva.
+	ReminderLead time.Duration
 
 	// Avisos de reservas nuevas (opcionales).
 	NtfyURL       string
@@ -97,6 +99,7 @@ func Load() (*Config, error) {
 		CancelWindow:           time.Duration(getInt("CANCEL_WINDOW_MIN", 120)) * time.Minute,
 		MaxActiveAppt:          getInt("MAX_ACTIVE_APPOINTMENTS", 3),
 		SeedDemoData:           getEnv("SEED_DEMO_DATA", "true") == "true",
+		ReminderLead:           time.Duration(getInt("REMINDER_LEAD_MIN", 30)) * time.Minute,
 		NtfyURL:                strings.TrimSpace(os.Getenv("NTFY_URL")),
 		NtfyToken:              os.Getenv("NTFY_TOKEN"),
 		TelegramToken:          os.Getenv("TELEGRAM_BOT_TOKEN"),
@@ -145,6 +148,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.TrustedPlatform != "" && cfg.TrustedPlatform != "cloudflare" {
 		return nil, errors.New("TRUSTED_PLATFORM must be empty or cloudflare")
+	}
+	if cfg.ReminderLead < 0 {
+		return nil, errors.New("REMINDER_LEAD_MIN must be zero or positive")
 	}
 	if cfg.SlotStep <= 0 || cfg.BookingWindow <= 0 {
 		return nil, errors.New("SLOT_STEP_MIN and BOOKING_WINDOW_DAYS must be positive")

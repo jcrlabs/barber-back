@@ -67,6 +67,10 @@ func New(cfg *config.Config, db *pgxpool.Pool, logger *slog.Logger) (*App, error
 			}
 		}
 	}()
+	// Recordatorio por email al cliente antes de su cita.
+	if cfg.ReminderLead > 0 && notifier.EmailEnabled() {
+		go runReminders(appts, notifier, cfg.ReminderLead, logger)
+	}
 	authH := handlers.NewAuthHandler(authSvc, users, oauth, cfg.PublicURL, cfg.CookieSecure()).WithAccountStore(limits)
 	bookingH := handlers.NewBookingHandler(bookingSvc, catalog, appts, users)
 	staffH := handlers.NewStaffHandler(bookingSvc, appts, catalog, notifier)

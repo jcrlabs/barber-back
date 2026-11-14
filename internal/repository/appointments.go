@@ -153,6 +153,24 @@ func (r *AppointmentRepository) List(ctx context.Context, f AppointmentFilter) (
 	return list, total, err
 }
 
+// ClaimDueReminders marca y devuelve las citas confirmadas que empiezan dentro de los próximos leadMin minutos
+// y aún no tienen recordatorio. SKIP LOCKED evita que dos réplicas reclamen la misma cita.
+// Las reservadas ya dentro de esa ventana se omiten: el cliente acaba de ver la confirmación.
+func (r *AppointmentRepository) ClaimDueReminders(ctx context.Context, now time.Time, leadMin int) ([]domain.Appointment, error) {
+	return collect(r.db.Query(ctx, `
+		WITH claimed AS (
+			UPDATE appointments SET reminder_sent_at = now()
+			WHERE id IN (
+				SELECT id FROM appointments
+				WHERE status = 'confirmed' AND reminder_sent_at IS NULL
+				  AND starts_at > $1 AND starts_at <= $1 + make_interval(mins => $2)
+				  AND created_at < starts_at - make_interval(mins => $2)
+				FOR UPDATE SKIP LOCKED
+			)
+			RETURNING id
+		)`+appointmentSelect+` WHERE a.id IN (SELECT id FROM claimed) ORDER BY a.starts_at`, now, leadMin))
+}
+
 func (r *AppointmentRepository) SetStatus(ctx context.Context, id uuid.UUID, status domain.AppointmentStatus) error {
 	tag, err := r.db.Exec(ctx, `
 		UPDATE appointments SET status = $2, updated_at = now(),

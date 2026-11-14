@@ -54,6 +54,8 @@ config:
   bookingWindowDays: "45"
   cancelWindowMin: "120"
   maxActiveAppointments: "3"
+  # Minutos de antelación del email de recordatorio al cliente (requiere SMTP); "0" lo desactiva.
+  reminderLeadMin: "30"
   seedDemoData: "true"
 
 # SealedSecret gestionado en jcrlabs-infra. Claves:

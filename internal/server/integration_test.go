@@ -13,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jcrlabs/barber-back/internal/config"
@@ -450,5 +453,72 @@ func TestLoginLimitsSharedAcrossReplicas(t *testing.T) {
 	}
 	if code := attempt(9, "otra@test.es"); code != 401 {
 		t.Fatalf("lock leaked to another account: %d", code)
+	}
+}
+
+func TestReminderClaimedOnce(t *testing.T) {
+	_, db := setup(t)
+	ctx := context.Background()
+	if err := SeedDemo(ctx, repository.NewCatalogRepository(db)); err != nil {
+		t.Fatal(err)
+	}
+	var clientID, barberID, serviceID uuid.UUID
+	if err := db.QueryRow(ctx, `INSERT INTO users (email, name) VALUES ('ana@test.es', 'Ana') RETURNING id`).Scan(&clientID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT b.id, s.id FROM barbers b, services s LIMIT 1`).Scan(&barberID, &serviceID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	insert := func(startsIn, bookedAgo time.Duration, status string) {
+		t.Helper()
+		start := now.Add(startsIn)
+		if _, err := db.Exec(ctx, `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, price_cents, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, 0, $7)`, clientID, barberID, serviceID, start, start.Add(10*time.Minute), status, now.Add(-bookedAgo)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(20*time.Minute, 24*time.Hour, "confirmed") // debe avisarse
+	insert(2*time.Hour, 24*time.Hour, "confirmed")    // todavía no
+	insert(-5*time.Minute, 24*time.Hour, "confirmed") // ya empezó
+	insert(40*time.Minute, 24*time.Hour, "cancelled") // anulada
+
+	appts := repository.NewAppointmentRepository(db)
+	first, err := appts.ClaimDueReminders(ctx, now, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].ClientEmail != "ana@test.es" {
+		t.Fatalf("first claim: %+v", first)
+	}
+	// Otra réplica (o el siguiente tick) no vuelve a reclamarla.
+	again, err := appts.ClaimDueReminders(ctx, now, 30)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("second claim: %v %+v", err, again)
+	}
+}
+
+func TestReminderSkipsLastMinuteBookings(t *testing.T) {
+	_, db := setup(t)
+	ctx := context.Background()
+	if err := SeedDemo(ctx, repository.NewCatalogRepository(db)); err != nil {
+		t.Fatal(err)
+	}
+	var clientID, barberID, serviceID uuid.UUID
+	if err := db.QueryRow(ctx, `INSERT INTO users (email, name) VALUES ('leo@test.es', 'Leo') RETURNING id`).Scan(&clientID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT b.id, s.id FROM barbers b, services s LIMIT 1`).Scan(&barberID, &serviceID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	start := now.Add(15 * time.Minute)
+	if _, err := db.Exec(ctx, `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, price_cents, created_at)
+		VALUES ($1, $2, $3, $4, $5, 'confirmed', 0, $6)`, clientID, barberID, serviceID, start, start.Add(10*time.Minute), now.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	due, err := repository.NewAppointmentRepository(db).ClaimDueReminders(ctx, now, 30)
+	if err != nil || len(due) != 0 {
+		t.Fatalf("last-minute booking reminded: %v %+v", err, due)
 	}
 }
